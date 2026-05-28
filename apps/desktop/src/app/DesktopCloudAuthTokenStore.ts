@@ -69,7 +69,7 @@ export interface DesktopCloudAuthTokenStoreShape {
 export class DesktopCloudAuthTokenStore extends Context.Service<
   DesktopCloudAuthTokenStore,
   DesktopCloudAuthTokenStoreShape
->()("t3/desktop/CloudAuthTokenStore") {}
+>()("@t3tools/desktop/app/DesktopCloudAuthTokenStore") {}
 
 function decodeSecretBytes(
   encoded: string,

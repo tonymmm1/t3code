@@ -96,6 +96,7 @@ function makeHarness(input: { readonly isDevelopment: boolean }): CloudAuthHarne
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     isDevelopment: input.isDevelopment,
   } as DesktopEnvironment.DesktopEnvironmentShape);
+  const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, environment);
 
   return {
     app,
@@ -105,8 +106,10 @@ function makeHarness(input: { readonly isDevelopment: boolean }): CloudAuthHarne
     sends,
     reveals,
     layer: Layer.mergeAll(
-      DesktopCloudAuth.layer.pipe(Layer.provide(NodeServices.layer)),
-      Layer.succeed(DesktopEnvironment.DesktopEnvironment, environment),
+      DesktopCloudAuth.layer.pipe(
+        Layer.provideMerge(environmentLayer),
+        Layer.provide(NodeServices.layer),
+      ),
       Layer.succeed(ElectronApp.ElectronApp, app),
       Layer.succeed(ElectronWindow.ElectronWindow, window),
     ),

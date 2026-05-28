@@ -458,7 +458,7 @@ export interface RelayClientPrincipalShape {
 export class RelayClientPrincipal extends Context.Service<
   RelayClientPrincipal,
   RelayClientPrincipalShape
->()("RelayClientPrincipal") {}
+>()("@t3tools/contracts/relay/RelayClientPrincipal") {}
 
 export interface RelayEnvironmentPrincipalShape {
   readonly environmentId: string;
@@ -468,7 +468,7 @@ export interface RelayEnvironmentPrincipalShape {
 export class RelayEnvironmentPrincipal extends Context.Service<
   RelayEnvironmentPrincipal,
   RelayEnvironmentPrincipalShape
->()("RelayEnvironmentPrincipal") {}
+>()("@t3tools/contracts/relay/RelayEnvironmentPrincipal") {}
 
 export class RelayClientAuth extends HttpApiMiddleware.Service<
   RelayClientAuth,

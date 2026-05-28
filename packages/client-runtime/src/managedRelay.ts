@@ -56,7 +56,7 @@ export interface ManagedRelayDpopSignerShape {
 export class ManagedRelayDpopSigner extends Context.Service<
   ManagedRelayDpopSigner,
   ManagedRelayDpopSignerShape
->()("t3/client-runtime/ManagedRelayDpopSigner") {}
+>()("@t3tools/client-runtime/managedRelay/ManagedRelayDpopSigner") {}
 
 export class ManagedRelayClientError extends Data.TaggedError("ManagedRelayClientError")<{
   readonly message: string;
@@ -130,7 +130,7 @@ export interface ManagedRelayClientShape {
 export class ManagedRelayClient extends Context.Service<
   ManagedRelayClient,
   ManagedRelayClientShape
->()("t3/client-runtime/ManagedRelayClient") {}
+>()("@t3tools/client-runtime/managedRelay/ManagedRelayClient") {}
 
 function relayClientError(message: string, cause?: unknown): ManagedRelayClientError {
   return new ManagedRelayClientError({ message, ...(cause === undefined ? {} : { cause }) });

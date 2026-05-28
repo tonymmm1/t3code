@@ -39,23 +39,16 @@ interface PendingCloudAuthRequest {
 }
 
 export interface DesktopCloudAuthShape {
-  readonly createRequest: Effect.Effect<
-    string,
-    DesktopCloudAuthCallbackServerError,
-    DesktopEnvironment.DesktopEnvironment
-  >;
+  readonly createRequest: Effect.Effect<string, DesktopCloudAuthCallbackServerError>;
   readonly configure: Effect.Effect<
     void,
     never,
-    | DesktopEnvironment.DesktopEnvironment
-    | ElectronApp.ElectronApp
-    | ElectronWindow.ElectronWindow
-    | Scope.Scope
+    ElectronApp.ElectronApp | ElectronWindow.ElectronWindow | Scope.Scope
   >;
 }
 
 export class DesktopCloudAuth extends Context.Service<DesktopCloudAuth, DesktopCloudAuthShape>()(
-  "t3/desktop/CloudAuth",
+  "@t3tools/desktop/app/DesktopCloudAuth",
 ) {}
 
 export function resolveCloudAuthCallbackScheme(input: { readonly isDevelopment: boolean }): string {
@@ -196,6 +189,7 @@ function startProtocolCallbackForwardServer(
 
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
   let pendingAuthRequest: PendingCloudAuthRequest | null = null;
   let dispatchCloudAuthCallback: (rawUrl: string) => void = ignoreCloudAuthCallback;
   const makeCloudAuthRequestState = Effect.gen(function* () {
@@ -205,7 +199,6 @@ const make = Effect.gen(function* () {
 
   return DesktopCloudAuth.of({
     createRequest: Effect.gen(function* () {
-      const environment = yield* DesktopEnvironment.DesktopEnvironment;
       const scheme = resolveCloudAuthCallbackScheme({
         isDevelopment: environment.isDevelopment,
       });
@@ -227,7 +220,6 @@ const make = Effect.gen(function* () {
       return redirectUrl;
     }),
     configure: Effect.gen(function* () {
-      const environment = yield* DesktopEnvironment.DesktopEnvironment;
       const electronApp = yield* ElectronApp.ElectronApp;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
       const scope = yield* Scope.Scope;

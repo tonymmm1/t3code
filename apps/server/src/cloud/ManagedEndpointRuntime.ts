@@ -33,7 +33,7 @@ export interface CloudManagedEndpointRuntimeShape {
 export class CloudManagedEndpointRuntime extends Context.Service<
   CloudManagedEndpointRuntime,
   CloudManagedEndpointRuntimeShape
->()("t3/cloud/ManagedEndpointRuntime") {}
+>()("t3/cloud/ManagedEndpointRuntime/CloudManagedEndpointRuntime") {}
 
 export type CloudManagedEndpointRuntimeStatus =
   | {

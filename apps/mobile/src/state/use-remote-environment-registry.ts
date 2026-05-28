@@ -264,7 +264,7 @@ export function connectSavedEnvironment(
                 httpBaseUrl: connection.httpBaseUrl,
                 bearerToken: connection.bearerToken ?? "",
               }),
-      ),
+        ),
       {
         onAttempt: () => {
           if (!isCurrentAttempt()) {
