@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import { assertSuccess } from "@effect/vitest/utils";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
 import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";

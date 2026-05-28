@@ -44,6 +44,7 @@ export interface AuthControlPlaneShape {
     readonly label?: string;
     readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
     readonly subject?: string;
+    readonly proofKeyThumbprint?: string;
   }) => Effect.Effect<IssuedPairingLink, AuthControlPlaneError>;
   readonly listPairingLinks: (input?: {
     readonly excludeSubjects?: ReadonlyArray<string>;

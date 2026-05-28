@@ -15,6 +15,7 @@ export interface BootstrapGrant {
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly subject: string;
   readonly label?: string;
+  readonly proofKeyThumbprint?: string;
   readonly expiresAt: DateTime.DateTime;
 }
 
@@ -28,6 +29,7 @@ export interface IssuedBootstrapCredential {
   readonly id: string;
   readonly credential: string;
   readonly label?: string;
+  readonly proofKeyThumbprint?: string;
   readonly expiresAt: DateTime.Utc;
 }
 
@@ -47,6 +49,7 @@ export interface BootstrapCredentialServiceShape {
     readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
     readonly subject?: string;
     readonly label?: string;
+    readonly proofKeyThumbprint?: string;
   }) => Effect.Effect<IssuedBootstrapCredential, BootstrapCredentialError>;
   readonly listActive: () => Effect.Effect<
     ReadonlyArray<AuthPairingLink>,
@@ -54,7 +57,12 @@ export interface BootstrapCredentialServiceShape {
   >;
   readonly streamChanges: Stream.Stream<BootstrapCredentialChange>;
   readonly revoke: (id: string) => Effect.Effect<boolean, BootstrapCredentialError>;
-  readonly consume: (credential: string) => Effect.Effect<BootstrapGrant, BootstrapCredentialError>;
+  readonly consume: (
+    credential: string,
+    input?: {
+      readonly proofKeyThumbprint?: string;
+    },
+  ) => Effect.Effect<BootstrapGrant, BootstrapCredentialError>;
 }
 
 export class BootstrapCredentialService extends Context.Service<

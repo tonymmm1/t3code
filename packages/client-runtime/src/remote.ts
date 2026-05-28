@@ -1,18 +1,18 @@
 import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
-  AuthStandardClientScopes,
+  AuthRemoteSessionScope,
   AuthTokenExchangeGrantType,
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
 } from "@t3tools/contracts";
-import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
 import type {
   EnvironmentHttpBadRequestError,
   EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
   EnvironmentHttpUnauthorizedError,
 } from "@t3tools/contracts";
+import { oauthScopeSetEquals } from "@t3tools/shared/oauthScope";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -25,7 +25,7 @@ import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 const DEFAULT_REMOTE_REQUEST_TIMEOUT_MS = 10_000;
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 
-const remoteEndpointUrl = (httpBaseUrl: string, pathname: string): string => {
+export const remoteEndpointUrl = (httpBaseUrl: string, pathname: string): string => {
   const url = new URL(httpBaseUrl);
   url.pathname = pathname;
   url.search = "";
@@ -167,24 +167,57 @@ export const makeEnvironmentHttpApiClient = (httpBaseUrl: string) =>
     });
   });
 
-export const bootstrapRemoteBearerSession = Effect.fn(
-  "clientRuntime.remote.bootstrapRemoteBearerSession",
+export const exchangeRemoteDpopAccessToken = Effect.fn(
+  "clientRuntime.remote.exchangeRemoteDpopAccessToken",
 )(function* (input: {
   readonly httpBaseUrl: string;
   readonly credential: string;
+  readonly dpopProof: string;
   readonly timeoutMs?: number;
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
-  return yield* executeRemoteRequest(
-    remoteEndpointUrl(input.httpBaseUrl, "/oauth/token"),
+  const response = yield* executeRemoteRequest(
+    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/token"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
-    client.auth.token({
+    client.auth.dpopToken({
+      headers: { dpop: input.dpopProof },
       payload: {
         grant_type: AuthTokenExchangeGrantType,
         subject_token: input.credential,
         subject_token_type: AuthEnvironmentBootstrapTokenType,
         requested_token_type: AuthAccessTokenType,
-        scope: encodeOAuthScope(AuthStandardClientScopes),
+        resource: new URL(input.httpBaseUrl).origin,
+        scope: AuthRemoteSessionScope,
+      },
+    }),
+  );
+  if (!oauthScopeSetEquals(response.scope, [AuthRemoteSessionScope])) {
+    return yield* new RemoteEnvironmentAuthInvalidJsonError({
+      message: "Remote auth endpoint returned unexpected DPoP access token scopes.",
+      cause: response.scope,
+    });
+  }
+  return response;
+});
+
+export const bootstrapRemoteBearerSession = Effect.fn(
+  "clientRuntime.remote.bootstrapRemoteBearerSession",
+)(function* (input: {
+  readonly httpBaseUrl: string;
+  readonly credential: string;
+  readonly proofKeyThumbprint?: string;
+  readonly dpopProof?: string;
+  readonly timeoutMs?: number;
+}) {
+  const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
+  return yield* executeRemoteRequest(
+    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/bootstrap/bearer"),
+    input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
+    client.auth.bootstrapBearer({
+      headers: input.dpopProof ? { dpop: input.dpopProof } : {},
+      payload: {
+        credential: input.credential,
+        ...(input.proofKeyThumbprint ? { proofKeyThumbprint: input.proofKeyThumbprint } : {}),
       },
     }),
   );
@@ -209,6 +242,27 @@ export const fetchRemoteSessionState = Effect.fn("clientRuntime.remote.fetchRemo
   },
 );
 
+export const fetchRemoteDpopSessionState = Effect.fn(
+  "clientRuntime.remote.fetchRemoteDpopSessionState",
+)(function* (input: {
+  readonly httpBaseUrl: string;
+  readonly accessToken: string;
+  readonly dpopProof: string;
+  readonly timeoutMs?: number;
+}) {
+  const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
+  return yield* executeRemoteRequest(
+    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/session"),
+    input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
+    client.auth.session({
+      headers: {
+        authorization: `DPoP ${input.accessToken}`,
+        dpop: input.dpopProof,
+      },
+    }),
+  );
+});
+
 export const fetchRemoteEnvironmentDescriptor = Effect.fn(
   "clientRuntime.remote.fetchRemoteEnvironmentDescriptor",
 )(function* (input: { readonly httpBaseUrl: string; readonly timeoutMs?: number }) {
@@ -220,8 +274,8 @@ export const fetchRemoteEnvironmentDescriptor = Effect.fn(
   );
 });
 
-export const issueRemoteWebSocketTicket = Effect.fn(
-  "clientRuntime.remote.issueRemoteWebSocketTicket",
+export const issueRemoteWebSocketToken = Effect.fn(
+  "clientRuntime.remote.issueRemoteWebSocketToken",
 )(function* (input: {
   readonly httpBaseUrl: string;
   readonly bearerToken: string;
@@ -229,11 +283,32 @@ export const issueRemoteWebSocketTicket = Effect.fn(
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
   return yield* executeRemoteRequest(
-    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/websocket-ticket"),
+    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/ws-token"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
-    client.auth.webSocketTicket({
+    client.auth.webSocketToken({
       headers: {
         authorization: `Bearer ${input.bearerToken}`,
+      },
+    }),
+  );
+});
+
+export const issueRemoteDpopWebSocketToken = Effect.fn(
+  "clientRuntime.remote.issueRemoteDpopWebSocketToken",
+)(function* (input: {
+  readonly httpBaseUrl: string;
+  readonly accessToken: string;
+  readonly dpopProof: string;
+  readonly timeoutMs?: number;
+}) {
+  const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
+  return yield* executeRemoteRequest(
+    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/ws-token"),
+    input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
+    client.auth.webSocketToken({
+      headers: {
+        authorization: `DPoP ${input.accessToken}`,
+        dpop: input.dpopProof,
       },
     }),
   );
@@ -247,7 +322,7 @@ export const resolveRemoteWebSocketConnectionUrl = Effect.fn(
   readonly bearerToken: string;
   readonly timeoutMs?: number;
 }) {
-  const issued = yield* issueRemoteWebSocketTicket({
+  const issued = yield* issueRemoteWebSocketToken({
     httpBaseUrl: input.httpBaseUrl,
     bearerToken: input.bearerToken,
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
@@ -257,6 +332,29 @@ export const resolveRemoteWebSocketConnectionUrl = Effect.fn(
   if (url.pathname === "" || url.pathname === "/") {
     url.pathname = "/ws";
   }
-  url.searchParams.set("wsTicket", issued.ticket);
+  url.searchParams.set("wsToken", issued.token);
+  return url.toString();
+});
+
+export const resolveRemoteDpopWebSocketConnectionUrl = Effect.fn(
+  "clientRuntime.remote.resolveRemoteDpopWebSocketConnectionUrl",
+)(function* (input: {
+  readonly wsBaseUrl: string;
+  readonly httpBaseUrl: string;
+  readonly accessToken: string;
+  readonly dpopProof: string;
+  readonly timeoutMs?: number;
+}) {
+  const issued = yield* issueRemoteDpopWebSocketToken({
+    httpBaseUrl: input.httpBaseUrl,
+    accessToken: input.accessToken,
+    dpopProof: input.dpopProof,
+    ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+  });
+  const url = new URL(input.wsBaseUrl);
+  if (url.pathname === "" || url.pathname === "/") {
+    url.pathname = "/ws";
+  }
+  url.searchParams.set("wsToken", issued.token);
   return url.toString();
 });

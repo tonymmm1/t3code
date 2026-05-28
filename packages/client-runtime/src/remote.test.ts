@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -8,9 +9,12 @@ import * as TestClock from "effect/testing/TestClock";
 import { EnvironmentHttpUnauthorizedError } from "@t3tools/contracts";
 import {
   bootstrapRemoteBearerSession,
+  exchangeRemoteDpopAccessToken,
   fetchRemoteEnvironmentDescriptor,
+  fetchRemoteDpopSessionState,
   fetchRemoteSessionState,
-  issueRemoteWebSocketTicket,
+  issueRemoteWebSocketToken,
+  issueRemoteDpopWebSocketToken,
   remoteHttpClientLayer,
   RemoteEnvironmentAuthInvalidJsonError,
   RemoteEnvironmentAuthTimeoutError,
@@ -91,11 +95,11 @@ describe("remote", () => {
       const fetch = recordedFetch(
         Response.json(
           {
-            access_token: "bearer-token",
-            issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
-            token_type: "Bearer",
-            expires_in: 3600,
-            scope: "orchestration:read orchestration:operate terminal:operate review:write",
+            authenticated: true,
+            role: "client",
+            sessionMethod: "bearer-session-token",
+            expiresAt: "2026-05-01T12:00:00.000Z",
+            sessionToken: "bearer-token",
           },
           { status: 200 },
         ),
@@ -104,20 +108,67 @@ describe("remote", () => {
       const result = yield* bootstrapRemoteBearerSession({
         httpBaseUrl: "https://remote.example.com/",
         credential: "pairing-token",
+        proofKeyThumbprint: "client-proof-key-thumbprint",
+        dpopProof: "dpop-proof",
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
       expect(result).toMatchObject({
-        token_type: "Bearer",
-        access_token: "bearer-token",
-        scope: "orchestration:read orchestration:operate terminal:operate review:write",
+        sessionMethod: "bearer-session-token",
+        sessionToken: "bearer-token",
       });
+      expect(DateTime.isUtc(result.expiresAt)).toBe(true);
       expectFetchCall(fetch.calls, 1, {
-        url: "https://remote.example.com/oauth/token",
+        url: "https://remote.example.com/api/auth/bootstrap/bearer",
         method: "POST",
         headers: {
-          "content-type": "application/x-www-form-urlencoded",
+          "content-type": "application/json",
+          dpop: "dpop-proof",
         },
-        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&scope=orchestration%3Aread+orchestration%3Aoperate+terminal%3Aoperate+review%3Awrite",
+        body: `{"credential":"pairing-token","proofKeyThumbprint":"client-proof-key-thumbprint"}`,
+      });
+    }),
+  );
+
+  it.effect("exchanges managed credentials and admits websocket requests with DPoP", () =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(
+        Response.json({
+          access_token: "dpop-access-token",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "DPoP",
+          expires_in: 3600,
+          scope: "remote:session",
+        }),
+        Response.json({
+          token: "ws-token",
+          expiresAt: "2026-05-01T12:05:00.000Z",
+        }),
+      );
+
+      const token = yield* exchangeRemoteDpopAccessToken({
+        httpBaseUrl: "https://remote.example.com/",
+        credential: "one-time-credential",
+        dpopProof: "token-proof",
+      }).pipe(provideRemoteHttp(fetch.fetchFn));
+      yield* issueRemoteDpopWebSocketToken({
+        httpBaseUrl: "https://remote.example.com/",
+        accessToken: token.access_token,
+        dpopProof: "resource-proof",
+      }).pipe(provideRemoteHttp(fetch.fetchFn));
+
+      expectFetchCall(fetch.calls, 1, {
+        url: "https://remote.example.com/api/auth/token",
+        method: "POST",
+        headers: { dpop: "token-proof", "content-type": "application/x-www-form-urlencoded" },
+        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=one-time-credential&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&resource=https%3A%2F%2Fremote.example.com&scope=remote%3Asession",
+      });
+      expectFetchCall(fetch.calls, 2, {
+        url: "https://remote.example.com/api/auth/ws-token",
+        method: "POST",
+        headers: {
+          authorization: "DPoP dpop-access-token",
+          dpop: "resource-proof",
+        },
       });
     }),
   );
@@ -146,23 +197,18 @@ describe("remote", () => {
             auth: {
               policy: "remote-reachable",
               bootstrapMethods: ["one-time-token"],
-              sessionMethods: ["browser-session-cookie", "bearer-access-token"],
+              sessionMethods: ["browser-session-cookie", "bearer-session-token"],
               sessionCookieName: "t3_session",
             },
-            scopes: [
-              "orchestration:read",
-              "orchestration:operate",
-              "terminal:operate",
-              "review:write",
-            ],
-            sessionMethod: "bearer-access-token",
+            role: "client",
+            sessionMethod: "bearer-session-token",
             expiresAt: "2026-05-01T12:00:00.000Z",
           },
           { status: 200 },
         ),
         Response.json(
           {
-            ticket: "ws-ticket",
+            token: "ws-token",
             expiresAt: "2026-05-01T12:05:00.000Z",
           },
           { status: 200 },
@@ -183,15 +229,15 @@ describe("remote", () => {
       }).pipe(provideRemoteHttp(fetch.fetchFn));
       expect(session).toMatchObject({
         authenticated: true,
-        scopes: ["orchestration:read", "orchestration:operate", "terminal:operate", "review:write"],
+        role: "client",
       });
 
-      const token = yield* issueRemoteWebSocketTicket({
+      const token = yield* issueRemoteWebSocketToken({
         httpBaseUrl: "https://remote.example.com/",
         bearerToken: "bearer-token",
       }).pipe(provideRemoteHttp(fetch.fetchFn));
       expect(token).toMatchObject({
-        ticket: "ws-ticket",
+        token: "ws-token",
       });
 
       expectFetchCall(fetch.calls, 1, {
@@ -206,10 +252,44 @@ describe("remote", () => {
         },
       });
       expectFetchCall(fetch.calls, 3, {
-        url: "https://remote.example.com/api/auth/websocket-ticket",
+        url: "https://remote.example.com/api/auth/ws-token",
         method: "POST",
         headers: {
           authorization: "Bearer bearer-token",
+        },
+      });
+    }),
+  );
+
+  it.effect("loads remote session state with a DPoP-bound access token", () =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(
+        Response.json({
+          authenticated: true,
+          auth: {
+            policy: "remote-reachable",
+            bootstrapMethods: ["one-time-token"],
+            sessionMethods: ["dpop-access-token"],
+            sessionCookieName: "t3_session",
+          },
+          role: "client",
+          sessionMethod: "dpop-access-token",
+          expiresAt: "2026-05-01T12:00:00.000Z",
+        }),
+      );
+
+      yield* fetchRemoteDpopSessionState({
+        httpBaseUrl: "https://remote.example.com/",
+        accessToken: "dpop-access-token",
+        dpopProof: "dpop-proof",
+      }).pipe(provideRemoteHttp(fetch.fetchFn));
+
+      expectFetchCall(fetch.calls, 1, {
+        url: "https://remote.example.com/api/auth/session",
+        method: "GET",
+        headers: {
+          authorization: "DPoP dpop-access-token",
+          dpop: "dpop-proof",
         },
       });
     }),
@@ -243,7 +323,7 @@ describe("remote", () => {
         ),
       );
 
-      const error = yield* issueRemoteWebSocketTicket({
+      const error = yield* issueRemoteWebSocketToken({
         httpBaseUrl: "https://remote.example.com/",
         bearerToken: "expired-token",
       }).pipe(provideRemoteHttp(fetch.fetchFn), Effect.flip);
@@ -260,11 +340,11 @@ describe("remote", () => {
       const fetch = recordedFetch(
         Response.json(
           {
-            access_token: "",
-            issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
-            token_type: "Bearer",
-            expires_in: 3600,
-            scope: "orchestration:read orchestration:operate terminal:operate review:write",
+            authenticated: true,
+            role: "client",
+            sessionMethod: "bearer-session-token",
+            expiresAt: "2026-05-01T12:00:00.000Z",
+            sessionToken: "",
           },
           { status: 200 },
         ),
@@ -277,32 +357,30 @@ describe("remote", () => {
 
       expect(error).toBeInstanceOf(RemoteEnvironmentAuthInvalidJsonError);
       expect(error.message).toBe(
-        "Remote auth endpoint returned an invalid response from https://remote.example.com/oauth/token.",
+        "Remote auth endpoint returned an invalid response from https://remote.example.com/api/auth/bootstrap/bearer.",
       );
     }),
   );
 
-  it.effect(
-    "mints a websocket url that targets the rpc route with a short-lived websocket ticket",
-    () =>
-      Effect.gen(function* () {
-        const fetch = recordedFetch(
-          Response.json(
-            {
-              ticket: "ws-ticket",
-              expiresAt: "2026-05-01T12:05:00.000Z",
-            },
-            { status: 200 },
-          ),
-        );
+  it.effect("mints a websocket url that targets the rpc route with a short-lived ws token", () =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(
+        Response.json(
+          {
+            token: "ws-token",
+            expiresAt: "2026-05-01T12:05:00.000Z",
+          },
+          { status: 200 },
+        ),
+      );
 
-        const url = yield* resolveRemoteWebSocketConnectionUrl({
-          wsBaseUrl: "wss://remote.example.com/",
-          httpBaseUrl: "https://remote.example.com/",
-          bearerToken: "bearer-token",
-        }).pipe(provideRemoteHttp(fetch.fetchFn));
+      const url = yield* resolveRemoteWebSocketConnectionUrl({
+        wsBaseUrl: "wss://remote.example.com/",
+        httpBaseUrl: "https://remote.example.com/",
+        bearerToken: "bearer-token",
+      }).pipe(provideRemoteHttp(fetch.fetchFn));
 
-        expect(url).toBe("wss://remote.example.com/ws?wsTicket=ws-ticket");
-      }),
+      expect(url).toBe("wss://remote.example.com/ws?wsToken=ws-token");
+    }),
   );
 });

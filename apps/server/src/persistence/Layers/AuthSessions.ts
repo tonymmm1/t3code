@@ -1,4 +1,4 @@
-import { AuthEnvironmentScopes, AuthSessionId, ServerAuthSessionMethod } from "@t3tools/contracts";
+import { AuthSessionId } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
@@ -26,8 +26,8 @@ import {
 const AuthSessionDbRow = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
-  scopes: Schema.fromJsonString(AuthEnvironmentScopes),
-  method: ServerAuthSessionMethod,
+  role: Schema.Literals(["owner", "client"]),
+  method: Schema.Literals(["browser-session-cookie", "bearer-session-token", "dpop-access-token"]),
   clientLabel: Schema.NullOr(Schema.String),
   clientIpAddress: Schema.NullOr(Schema.String),
   clientUserAgent: Schema.NullOr(Schema.String),
@@ -44,7 +44,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
   return {
     sessionId: row.sessionId,
     subject: row.subject,
-    scopes: row.scopes,
+    role: row.role,
     method: row.method,
     client: {
       label: row.clientLabel,
@@ -78,7 +78,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         INSERT INTO auth_sessions (
           session_id,
           subject,
-          scopes,
+          role,
           method,
           client_label,
           client_ip_address,
@@ -93,7 +93,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         VALUES (
           ${input.sessionId},
           ${input.subject},
-          ${JSON.stringify(input.scopes)},
+          ${input.role},
           ${input.method},
           ${input.client.label},
           ${input.client.ipAddress},
@@ -116,7 +116,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         SELECT
           session_id AS "sessionId",
           subject AS "subject",
-          scopes AS "scopes",
+          role AS "role",
           method AS "method",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",
@@ -141,7 +141,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         SELECT
           session_id AS "sessionId",
           subject AS "subject",
-          scopes AS "scopes",
+          role AS "role",
           method AS "method",
           client_label AS "clientLabel",
           client_ip_address AS "clientIpAddress",

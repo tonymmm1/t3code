@@ -1,4 +1,5 @@
 import { EnvironmentHttpUnauthorizedError, EnvironmentId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,17 +13,33 @@ const mockResolveRemotePairingTarget = vi.fn();
 const mockFetchRemoteEnvironmentDescriptor = vi.fn();
 const mockBootstrapRemoteBearerSession = vi.fn();
 const mockFetchRemoteSessionState = vi.fn();
+const mockFetchRemoteDpopSessionState = vi.fn();
 const mockResolveRemoteWebSocketConnectionUrl = vi.fn();
-const mockRemoteHttpRunPromise = vi.fn((effect: Promise<unknown>) => effect);
+let managedRelayDpopSigner: typeof import("@t3tools/client-runtime").ManagedRelayDpopSigner;
+const mockRemoteHttpRunPromise = vi.fn(<A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.runPromise(
+    effect.pipe(
+      Effect.provideService(
+        managedRelayDpopSigner,
+        managedRelayDpopSigner.of({
+          thumbprint: Effect.succeed("thumbprint"),
+          createProof: () => Effect.succeed("dpop-proof"),
+        }),
+      ),
+    ),
+  ),
+);
 const mockBootstrapSshBearerSession = vi.fn();
 const mockFetchSshSessionState = vi.fn();
 const mockPersistSavedEnvironmentRecord = vi.fn();
 const mockWriteSavedEnvironmentBearerToken = vi.fn();
+const mockWriteSavedEnvironmentCredential = vi.fn();
 const mockSetSavedEnvironmentRegistry = vi.fn();
 const mockGetSavedEnvironmentRecord = vi.fn((environmentId: EnvironmentId) => {
   return mockSavedRecords.find((record) => record.environmentId === environmentId) ?? null;
 });
 const mockReadSavedEnvironmentBearerToken = vi.fn();
+const mockReadSavedEnvironmentCredential = vi.fn();
 const mockRemoveSavedEnvironmentBearerToken = vi.fn();
 const mockPatchRuntime = vi.fn();
 const mockClearRuntime = vi.fn();
@@ -60,6 +77,8 @@ const mockClientGetConfig = vi.fn(async () => ({
     label: "Remote environment",
   },
 }));
+const mockConnectManagedCloudEnvironment = vi.fn();
+const mockReadManagedRelayClerkToken = vi.fn();
 
 vi.mock("@t3tools/shared/remote", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@t3tools/shared/remote")>()),
@@ -67,9 +86,17 @@ vi.mock("@t3tools/shared/remote", async (importOriginal) => ({
 }));
 
 vi.mock("../../lib/runtime", () => ({
-  remoteHttpRuntime: {
+  webRuntime: {
     runPromise: mockRemoteHttpRunPromise,
   },
+}));
+
+vi.mock("../../cloud/linkEnvironment", () => ({
+  connectManagedCloudEnvironment: mockConnectManagedCloudEnvironment,
+}));
+
+vi.mock("../../cloud/managedAuth", () => ({
+  readManagedRelayClerkToken: mockReadManagedRelayClerkToken,
 }));
 
 vi.mock("~/localApi", () => ({
@@ -86,6 +113,7 @@ vi.mock("./catalog", () => ({
   listSavedEnvironmentRecords: mockListSavedEnvironmentRecords,
   persistSavedEnvironmentRecord: mockPersistSavedEnvironmentRecord,
   readSavedEnvironmentBearerToken: mockReadSavedEnvironmentBearerToken,
+  readSavedEnvironmentCredential: mockReadSavedEnvironmentCredential,
   removeSavedEnvironmentBearerToken: mockRemoveSavedEnvironmentBearerToken,
   toPersistedSavedEnvironmentRecord: mockToPersistedSavedEnvironmentRecord,
   useSavedEnvironmentRegistryStore: {
@@ -107,6 +135,7 @@ vi.mock("./catalog", () => ({
   },
   waitForSavedEnvironmentRegistryHydration: vi.fn(),
   writeSavedEnvironmentBearerToken: mockWriteSavedEnvironmentBearerToken,
+  writeSavedEnvironmentCredential: mockWriteSavedEnvironmentCredential,
 }));
 
 vi.mock("./connection", async (importOriginal) => ({
@@ -116,6 +145,7 @@ vi.mock("./connection", async (importOriginal) => ({
 
 vi.mock("@t3tools/client-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@t3tools/client-runtime")>();
+  managedRelayDpopSigner = actual.ManagedRelayDpopSigner;
   return {
     ...actual,
     bootstrapRemoteBearerSession: mockBootstrapRemoteBearerSession,
@@ -132,6 +162,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
     })),
     fetchRemoteEnvironmentDescriptor: mockFetchRemoteEnvironmentDescriptor,
     fetchRemoteSessionState: mockFetchRemoteSessionState,
+    fetchRemoteDpopSessionState: mockFetchRemoteDpopSessionState,
     resolveRemoteWebSocketConnectionUrl: mockResolveRemoteWebSocketConnectionUrl,
   };
 });
@@ -156,7 +187,7 @@ describe("addSavedEnvironment", () => {
         fetchSshEnvironmentDescriptor: mockFetchSshEnvironmentDescriptor,
         bootstrapSshBearerSession: mockBootstrapSshBearerSession,
         fetchSshSessionState: mockFetchSshSessionState,
-        issueSshWebSocketTicket: vi.fn(),
+        issueSshWebSocketToken: vi.fn(),
       },
     });
     mockResolveRemotePairingTarget.mockImplementation(
@@ -174,37 +205,55 @@ describe("addSavedEnvironment", () => {
         credential: input.pairingCode ?? "pairing-code",
       }),
     );
-    mockFetchRemoteEnvironmentDescriptor.mockResolvedValue({
-      environmentId: EnvironmentId.make("environment-1"),
-      label: "Remote environment",
+    mockReadSavedEnvironmentCredential.mockImplementation(async () => {
+      const token = await mockReadSavedEnvironmentBearerToken();
+      return token ? { version: 1, method: "bearer", token } : null;
     });
-    mockBootstrapRemoteBearerSession.mockResolvedValue({
-      access_token: "bearer-token",
-      scope: "orchestration:read orchestration:operate terminal:operate review:write",
-    });
-    mockFetchRemoteSessionState.mockResolvedValue({
-      authenticated: true,
-      scopes: ["orchestration:read", "access:manage"],
-    });
-    mockResolveRemoteWebSocketConnectionUrl.mockResolvedValue(
-      "wss://remote.example.com/?wsTicket=remote-token",
+    mockFetchRemoteEnvironmentDescriptor.mockReturnValue(
+      Effect.succeed({
+        environmentId: EnvironmentId.make("environment-1"),
+        label: "Remote environment",
+      }),
+    );
+    mockBootstrapRemoteBearerSession.mockReturnValue(
+      Effect.succeed({
+        sessionToken: "bearer-token",
+        role: "owner",
+      }),
+    );
+    mockFetchRemoteSessionState.mockReturnValue(
+      Effect.succeed({
+        authenticated: true,
+        role: "owner",
+      }),
+    );
+    mockFetchRemoteDpopSessionState.mockReturnValue(
+      Effect.succeed({
+        authenticated: true,
+        role: "owner",
+      }),
+    );
+    mockResolveRemoteWebSocketConnectionUrl.mockReturnValue(
+      Effect.succeed("wss://remote.example.com/?wsToken=remote-token"),
     );
     mockFetchSshEnvironmentDescriptor.mockResolvedValue({
       environmentId: EnvironmentId.make("environment-1"),
       label: "Remote environment",
     });
     mockBootstrapSshBearerSession.mockResolvedValue({
-      access_token: "ssh-bearer-token",
-      scope: "orchestration:read orchestration:operate terminal:operate review:write",
+      sessionToken: "ssh-bearer-token",
+      role: "owner",
     });
     mockPersistSavedEnvironmentRecord.mockResolvedValue(undefined);
     mockWriteSavedEnvironmentBearerToken.mockResolvedValue(false);
+    mockWriteSavedEnvironmentCredential.mockResolvedValue(true);
+    mockReadManagedRelayClerkToken.mockResolvedValue(null);
     mockSetSavedEnvironmentRegistry.mockResolvedValue(undefined);
     mockReadSavedEnvironmentBearerToken.mockResolvedValue(null);
     mockRemoveSavedEnvironmentBearerToken.mockResolvedValue(undefined);
     mockFetchSshSessionState.mockResolvedValue({
       authenticated: true,
-      scopes: ["orchestration:read", "access:manage"],
+      role: "owner",
     });
     mockCreateEnvironmentConnection.mockImplementation(
       (input: { knownEnvironment: { environmentId: EnvironmentId }; client: unknown }) => ({
@@ -325,6 +374,92 @@ describe("addSavedEnvironment", () => {
     await resetEnvironmentServiceForTests();
   });
 
+  it("installs relay-managed environments with versioned DPoP credentials", async () => {
+    const { addManagedRelayEnvironment, resetEnvironmentServiceForTests } =
+      await import("./service");
+
+    await addManagedRelayEnvironment({
+      environmentId: EnvironmentId.make("environment-1"),
+      label: "Managed remote",
+      httpBaseUrl: "https://managed.example.com/",
+      wsBaseUrl: "wss://managed.example.com/",
+      relayUrl: "https://relay.example.com",
+      accessToken: "managed-access-token",
+    });
+
+    expect(mockWriteSavedEnvironmentCredential).toHaveBeenCalledWith(
+      EnvironmentId.make("environment-1"),
+      {
+        version: 1,
+        method: "dpop",
+        accessToken: "managed-access-token",
+      },
+    );
+    expect(mockFetchRemoteDpopSessionState).toHaveBeenCalledWith({
+      httpBaseUrl: "https://managed.example.com/",
+      accessToken: "managed-access-token",
+      dpopProof: "dpop-proof",
+    });
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("renews expired managed DPoP credentials through the relay", async () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    mockSavedRecords = [
+      {
+        environmentId,
+        label: "Managed remote",
+        httpBaseUrl: "https://managed.example.com/",
+        wsBaseUrl: "wss://managed.example.com/",
+        createdAt: "2026-05-25T00:00:00.000Z",
+        lastConnectedAt: null,
+        relayManaged: { relayUrl: "https://relay.example.com" },
+      },
+    ];
+    mockReadSavedEnvironmentCredential.mockResolvedValue({
+      version: 1,
+      method: "dpop",
+      accessToken: "expired-access-token",
+    });
+    mockFetchRemoteDpopSessionState
+      .mockReturnValueOnce(
+        Effect.fail(
+          decodeEnvironmentHttpUnauthorizedError({
+            _tag: "EnvironmentHttpUnauthorizedError",
+            message: "expired",
+          }),
+        ),
+      )
+      .mockReturnValue(Effect.succeed({ authenticated: true, role: "owner" }));
+    mockReadManagedRelayClerkToken.mockResolvedValue("clerk-token");
+    mockConnectManagedCloudEnvironment.mockReturnValue(
+      Effect.succeed({
+        environmentId,
+        label: "Managed remote",
+        httpBaseUrl: "https://managed.example.com/",
+        wsBaseUrl: "wss://managed.example.com/",
+        relayUrl: "https://relay.example.com",
+        accessToken: "renewed-access-token",
+      }),
+    );
+
+    const { reconnectSavedEnvironment, resetEnvironmentServiceForTests } =
+      await import("./service");
+    await reconnectSavedEnvironment(environmentId);
+
+    expect(mockConnectManagedCloudEnvironment).toHaveBeenCalledWith({
+      clerkToken: "clerk-token",
+      relayUrl: "https://relay.example.com",
+      environment: expect.objectContaining({ environmentId }),
+    });
+    expect(mockWriteSavedEnvironmentCredential).toHaveBeenCalledWith(environmentId, {
+      version: 1,
+      method: "dpop",
+      accessToken: "renewed-access-token",
+    });
+    await resetEnvironmentServiceForTests();
+  });
+
   it("removes an older ssh record when the same target returns a new environment id", async () => {
     mockWriteSavedEnvironmentBearerToken.mockResolvedValue(true);
     mockFetchSshEnvironmentDescriptor.mockResolvedValue({
@@ -383,18 +518,18 @@ describe("addSavedEnvironment", () => {
     mockWriteSavedEnvironmentBearerToken.mockResolvedValue(true);
     mockBootstrapSshBearerSession
       .mockResolvedValueOnce({
-        access_token: "ssh-bearer-token",
-        scope: "orchestration:read orchestration:operate terminal:operate review:write",
+        sessionToken: "ssh-bearer-token",
+        role: "owner",
       })
       .mockResolvedValueOnce({
-        access_token: "ssh-bearer-token-2",
-        scope: "orchestration:read orchestration:operate terminal:operate review:write",
+        sessionToken: "ssh-bearer-token-2",
+        role: "owner",
       });
     mockFetchSshSessionState
       .mockRejectedValueOnce(new Error("[ssh_http:401] Unauthorized"))
       .mockResolvedValueOnce({
         authenticated: true,
-        scopes: ["orchestration:read", "access:manage"],
+        role: "owner",
       });
 
     const { connectDesktopSshEnvironment, resetEnvironmentServiceForTests } =
@@ -424,7 +559,7 @@ describe("addSavedEnvironment", () => {
       _tag: "EnvironmentHttpUnauthorizedError",
       message: "Unauthorized",
     });
-    mockFetchRemoteSessionState.mockRejectedValueOnce(authError);
+    mockFetchRemoteSessionState.mockReturnValueOnce(Effect.fail(authError));
 
     const { addSavedEnvironment, resetEnvironmentServiceForTests } = await import("./service");
 
@@ -449,18 +584,18 @@ describe("addSavedEnvironment", () => {
     mockWriteSavedEnvironmentBearerToken.mockResolvedValue(true);
     mockBootstrapSshBearerSession
       .mockResolvedValueOnce({
-        access_token: "ssh-bearer-token",
-        scope: "orchestration:read orchestration:operate terminal:operate review:write",
+        sessionToken: "ssh-bearer-token",
+        role: "owner",
       })
       .mockResolvedValueOnce({
-        access_token: "ssh-bearer-token-2",
-        scope: "orchestration:read orchestration:operate terminal:operate review:write",
+        sessionToken: "ssh-bearer-token-2",
+        role: "owner",
       });
     mockFetchSshSessionState
       .mockRejectedValueOnce(new Error("[ssh_http:401] Unauthorized"))
       .mockResolvedValueOnce({
         authenticated: true,
-        scopes: ["orchestration:read", "access:manage"],
+        role: "owner",
       });
 
     const createdConnections: Array<{
@@ -744,12 +879,15 @@ describe("addSavedEnvironment", () => {
     );
     let resolveSessionState!: (value: {
       readonly authenticated: true;
-      readonly scopes: ReadonlyArray<"orchestration:read" | "access:manage">;
+      readonly role: "owner";
     }) => void;
     mockFetchRemoteSessionState.mockReturnValue(
-      new Promise((resolve) => {
-        resolveSessionState = resolve;
-      }),
+      Effect.promise(
+        () =>
+          new Promise((resolve) => {
+            resolveSessionState = resolve;
+          }),
+      ),
     );
 
     const {
@@ -767,7 +905,7 @@ describe("addSavedEnvironment", () => {
     await disconnectSavedEnvironment(EnvironmentId.make("environment-1"));
     resolveSessionState({
       authenticated: true,
-      scopes: ["orchestration:read", "access:manage"],
+      role: "owner",
     });
     await expect(reconnectPromise).resolves.toBeUndefined();
 
