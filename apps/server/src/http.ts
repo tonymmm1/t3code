@@ -3,6 +3,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  EnvironmentHttpForbiddenError,
 } from "@t3tools/contracts";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as Data from "effect/Data";
@@ -31,7 +32,7 @@ import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { resolveStaticDir, ServerConfig } from "./config.ts";
 import { BrowserTraceCollector } from "./observability/Services/BrowserTraceCollector.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
-import { AuthError, ServerAuth } from "./auth/Services/ServerAuth.ts";
+import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { browserApiCorsHeaders } from "./httpCors.ts";
@@ -84,9 +85,8 @@ const requireEnvironmentScope = (
     const serverAuth = yield* ServerAuth;
     const session = yield* serverAuth.authenticateHttpRequest(request);
     if (!session.scopes.includes(scope)) {
-      return yield* new AuthError({
+      return yield* new EnvironmentHttpForbiddenError({
         message: `The authenticated token is missing required scope: ${scope}.`,
-        status: 403,
       });
     }
   });
@@ -154,7 +154,14 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
           Effect.succeed(HttpServerResponse.text("Trace export failed.", { status: 502 })),
         ),
       );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentHttpBadRequestError: respondToAuthError,
+      EnvironmentHttpUnauthorizedError: respondToAuthError,
+      EnvironmentHttpForbiddenError: respondToAuthError,
+      ServerAuthInternalError: respondToAuthError,
+    }),
+  ),
 );
 
 export const attachmentsRouteLayer = HttpRouter.add(
@@ -210,7 +217,14 @@ export const attachmentsRouteLayer = HttpRouter.add(
         Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
       ),
     );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentHttpBadRequestError: respondToAuthError,
+      EnvironmentHttpUnauthorizedError: respondToAuthError,
+      EnvironmentHttpForbiddenError: respondToAuthError,
+      ServerAuthInternalError: respondToAuthError,
+    }),
+  ),
 );
 
 export const projectFaviconRouteLayer = HttpRouter.add(
@@ -251,7 +265,14 @@ export const projectFaviconRouteLayer = HttpRouter.add(
         Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
       ),
     );
-  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentHttpBadRequestError: respondToAuthError,
+      EnvironmentHttpUnauthorizedError: respondToAuthError,
+      EnvironmentHttpForbiddenError: respondToAuthError,
+      ServerAuthInternalError: respondToAuthError,
+    }),
+  ),
 );
 
 export const staticAndDevRouteLayer = HttpRouter.add(

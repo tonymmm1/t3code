@@ -76,4 +76,27 @@ describe("DesktopSshRemoteApi", () => {
       assert.equal(error.cause instanceof SshHttpBridgeError, false);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect("rejects non-loopback HTTP endpoints before issuing an SSH bridge request", () => {
+    let requestCount = 0;
+    const layer = makeLayer((request) =>
+      Effect.sync(() => {
+        requestCount += 1;
+        return jsonResponse(request, {});
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const remoteApi = yield* DesktopSshRemoteApi.DesktopSshRemoteApi;
+      const error = yield* remoteApi
+        .fetchEnvironmentDescriptor({
+          httpBaseUrl: "http://remote.example.com:41773/",
+        })
+        .pipe(Effect.flip);
+
+      assert.instanceOf(error, DesktopSshRemoteApi.DesktopSshRemoteApiError);
+      assert.instanceOf(error.cause, SshHttpBridgeError);
+      assert.equal(requestCount, 0);
+    }).pipe(Effect.provide(layer));
+  });
 });

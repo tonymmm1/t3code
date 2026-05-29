@@ -8,7 +8,7 @@ import { ServerConfig } from "../../config.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { BootstrapCredentialError } from "../Services/BootstrapCredentialService.ts";
 import { ServerAuth, type ServerAuthShape } from "../Services/ServerAuth.ts";
-import { ServerAuthLive, toBootstrapExchangeAuthError } from "./ServerAuth.ts";
+import { ServerAuthLive, toBootstrapExchangeError } from "./ServerAuth.ts";
 import { ServerSecretStoreLive } from "./ServerSecretStore.ts";
 
 const makeServerConfigLayer = (overrides?: Partial<ServerConfigShape>) =>
@@ -50,21 +50,21 @@ const requestMetadata = {
 it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
   it.effect("maps invalid bootstrap credential failures to 401", () =>
     Effect.sync(() => {
-      const error = toBootstrapExchangeAuthError(
+      const error = toBootstrapExchangeError(
         new BootstrapCredentialError({
           message: "Unknown bootstrap credential.",
           status: 401,
         }),
       );
 
-      expect(error.status).toBe(401);
+      expect(error._tag).toBe("EnvironmentHttpUnauthorizedError");
       expect(error.message).toBe("Invalid bootstrap credential.");
     }),
   );
 
   it.effect("maps unexpected bootstrap failures to 500", () =>
     Effect.sync(() => {
-      const error = toBootstrapExchangeAuthError(
+      const error = toBootstrapExchangeError(
         new BootstrapCredentialError({
           message: "Failed to consume bootstrap credential.",
           status: 500,
@@ -72,7 +72,7 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
         }),
       );
 
-      expect(error.status).toBe(500);
+      expect(error._tag).toBe("ServerAuthInternalError");
       expect(error.message).toBe("Failed to validate bootstrap credential.");
     }),
   );
@@ -114,7 +114,7 @@ it.layer(NodeServices.layer)("ServerAuthLive", (it) => {
         )
         .pipe(Effect.flip);
 
-      expect(error.status).toBe(400);
+      expect(error._tag).toBe("EnvironmentHttpBadRequestError");
       expect(error.message).toContain("exceeds the bootstrap credential grant");
     }).pipe(Effect.provide(makeServerAuthLayer())),
   );

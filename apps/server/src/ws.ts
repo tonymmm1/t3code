@@ -1464,7 +1464,14 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           () => rpcWebSocketHttpEffect,
           () => sessions.markDisconnected(session.sessionId),
         );
-      }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+      }).pipe(
+        Effect.catchTags({
+          EnvironmentHttpBadRequestError: respondToAuthError,
+          EnvironmentHttpUnauthorizedError: respondToAuthError,
+          EnvironmentHttpForbiddenError: respondToAuthError,
+          ServerAuthInternalError: respondToAuthError,
+        }),
+      ),
     ),
   ),
 );

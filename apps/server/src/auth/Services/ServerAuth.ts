@@ -13,6 +13,11 @@ import type {
   ServerAuthSessionMethod,
   AuthWebSocketTicketResult,
 } from "@t3tools/contracts";
+import {
+  EnvironmentHttpBadRequestError,
+  EnvironmentHttpForbiddenError,
+  EnvironmentHttpUnauthorizedError,
+} from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
@@ -27,11 +32,16 @@ export interface AuthenticatedSession {
   readonly expiresAt?: DateTime.DateTime;
 }
 
-export class AuthError extends Data.TaggedError("AuthError")<{
+export class ServerAuthInternalError extends Data.TaggedError("ServerAuthInternalError")<{
   readonly message: string;
-  readonly status?: 400 | 401 | 403 | 500;
   readonly cause?: unknown;
 }> {}
+
+export type ServerAuthError =
+  | EnvironmentHttpBadRequestError
+  | EnvironmentHttpForbiddenError
+  | EnvironmentHttpUnauthorizedError
+  | ServerAuthInternalError;
 
 export interface ServerAuthShape {
   readonly getDescriptor: () => Effect.Effect<ServerAuthDescriptor>;
@@ -46,40 +56,40 @@ export interface ServerAuthShape {
       readonly response: AuthBrowserSessionResult;
       readonly sessionToken: string;
     },
-    AuthError
+    ServerAuthError
   >;
   readonly exchangeBootstrapCredentialForAccessToken: (
     credential: string,
     requestedScopes: ReadonlyArray<AuthEnvironmentScope>,
     requestMetadata: AuthClientMetadata,
-  ) => Effect.Effect<AuthAccessTokenResult, AuthError>;
+  ) => Effect.Effect<AuthAccessTokenResult, ServerAuthError>;
   readonly issuePairingCredential: (
     input?: AuthCreatePairingCredentialInput & {
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
     },
-  ) => Effect.Effect<AuthPairingCredentialResult, AuthError>;
-  readonly listPairingLinks: () => Effect.Effect<ReadonlyArray<AuthPairingLink>, AuthError>;
-  readonly revokePairingLink: (id: string) => Effect.Effect<boolean, AuthError>;
+  ) => Effect.Effect<AuthPairingCredentialResult, ServerAuthError>;
+  readonly listPairingLinks: () => Effect.Effect<ReadonlyArray<AuthPairingLink>, ServerAuthError>;
+  readonly revokePairingLink: (id: string) => Effect.Effect<boolean, ServerAuthError>;
   readonly listClientSessions: (
     currentSessionId: AuthSessionId,
-  ) => Effect.Effect<ReadonlyArray<AuthClientSession>, AuthError>;
+  ) => Effect.Effect<ReadonlyArray<AuthClientSession>, ServerAuthError>;
   readonly revokeClientSession: (
     currentSessionId: AuthSessionId,
     targetSessionId: AuthSessionId,
-  ) => Effect.Effect<boolean, AuthError>;
+  ) => Effect.Effect<boolean, ServerAuthError>;
   readonly revokeOtherClientSessions: (
     currentSessionId: AuthSessionId,
-  ) => Effect.Effect<number, AuthError>;
+  ) => Effect.Effect<number, ServerAuthError>;
   readonly authenticateHttpRequest: (
     request: HttpServerRequest.HttpServerRequest,
-  ) => Effect.Effect<AuthenticatedSession, AuthError>;
+  ) => Effect.Effect<AuthenticatedSession, ServerAuthError>;
   readonly authenticateWebSocketUpgrade: (
     request: HttpServerRequest.HttpServerRequest,
-  ) => Effect.Effect<AuthenticatedSession, AuthError>;
+  ) => Effect.Effect<AuthenticatedSession, ServerAuthError>;
   readonly issueWebSocketTicket: (
-    session: AuthenticatedSession,
-  ) => Effect.Effect<AuthWebSocketTicketResult, AuthError>;
-  readonly issueStartupPairingUrl: (baseUrl: string) => Effect.Effect<string, AuthError>;
+    session: Pick<AuthenticatedSession, "sessionId">,
+  ) => Effect.Effect<AuthWebSocketTicketResult, ServerAuthError>;
+  readonly issueStartupPairingUrl: (baseUrl: string) => Effect.Effect<string, ServerAuthError>;
 }
 
 export class ServerAuth extends Context.Service<ServerAuth, ServerAuthShape>()(

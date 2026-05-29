@@ -9,17 +9,8 @@ import {
   EnvironmentHttpBadRequestError,
   EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
-  EnvironmentAccessManagementAuth,
-  EnvironmentAccessManagementPrincipal,
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
-  EnvironmentOrchestrationOperationAuth,
-  EnvironmentOrchestrationOperationPrincipal,
-  EnvironmentOrchestrationReadAuth,
-  EnvironmentOrchestrationReadPrincipal,
-  EnvironmentRelayManagementAuth,
-  EnvironmentRelayManagementPrincipal,
-  EnvironmentHttpUnauthorizedError,
 } from "@t3tools/contracts";
 import type {
   AuthBrowserSessionRequest,
@@ -38,46 +29,55 @@ import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
-import { AuthError, ServerAuth } from "./Services/ServerAuth.ts";
+import {
+  ServerAuth,
+  ServerAuthInternalError,
+  type ServerAuthError,
+} from "./Services/ServerAuth.ts";
 import { SessionCredentialService } from "./Services/SessionCredentialService.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 
-export const respondToAuthError = (error: AuthError) =>
+export const respondToAuthError = (error: ServerAuthError) =>
   Effect.gen(function* () {
-    if ((error.status ?? 500) >= 500) {
+    if (error._tag === "ServerAuthInternalError") {
       yield* Effect.logError("auth route failed", {
         message: error.message,
         cause: error.cause,
       });
+      return HttpServerResponse.jsonUnsafe(
+        new EnvironmentHttpInternalServerError({ message: error.message }),
+        { status: 500 },
+      );
     }
-    return HttpServerResponse.jsonUnsafe(
-      {
-        error: error.message,
-      },
-      { status: error.status ?? 500 },
-    );
+    const status =
+      error._tag === "EnvironmentHttpBadRequestError"
+        ? 400
+        : error._tag === "EnvironmentHttpUnauthorizedError"
+          ? 401
+          : 403;
+    return HttpServerResponse.jsonUnsafe(error, { status });
   });
 
-export const failEnvironmentHttpAuthError = (error: AuthError) =>
+export const failEnvironmentHttpInternalError = (error: ServerAuthInternalError) =>
   Effect.gen(function* () {
-    if ((error.status ?? 500) >= 500) {
-      yield* Effect.logError("auth route failed", {
-        message: error.message,
-        cause: error.cause,
-      });
-    }
-
-    switch (error.status) {
-      case 400:
-        return yield* new EnvironmentHttpBadRequestError({ message: error.message });
-      case 401:
-        return yield* new EnvironmentHttpUnauthorizedError({ message: error.message });
-      case 403:
-        return yield* new EnvironmentHttpForbiddenError({ message: error.message });
-      default:
-        return yield* new EnvironmentHttpInternalServerError({ message: error.message });
-    }
+    yield* Effect.logError("auth route failed", {
+      message: error.message,
+      cause: error.cause,
+    });
+    return yield* new EnvironmentHttpInternalServerError({ message: error.message });
   });
+
+export const requireEnvironmentScope = Effect.fn("environment.auth.requireScope")(function* (
+  scope: AuthEnvironmentScope,
+) {
+  const session = yield* EnvironmentAuthenticatedPrincipal;
+  if (!session.scopes.has(scope)) {
+    return yield* new EnvironmentHttpForbiddenError({
+      message: `The authenticated token is missing required scope: ${scope}.`,
+    });
+  }
+  return session;
+});
 
 export const environmentAuthenticatedAuthLayer = Layer.effect(
   EnvironmentAuthenticatedAuth,
@@ -88,93 +88,12 @@ export const environmentAuthenticatedAuthLayer = Layer.effect(
         const request = yield* HttpServerRequest.HttpServerRequest;
         const session = yield* serverAuth.authenticateHttpRequest(request);
         return yield* httpEffect.pipe(
-          Effect.provideService(EnvironmentAuthenticatedPrincipal, session),
+          Effect.provideService(EnvironmentAuthenticatedPrincipal, {
+            ...session,
+            scopes: new Set(session.scopes),
+          }),
         );
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError));
-  }),
-);
-
-export const environmentOrchestrationReadAuthLayer = Layer.effect(
-  EnvironmentOrchestrationReadAuth,
-  Effect.gen(function* () {
-    const serverAuth = yield* ServerAuth;
-    return (httpEffect) =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const session = yield* serverAuth.authenticateHttpRequest(request);
-        if (!session.scopes.includes(AuthOrchestrationReadScope)) {
-          return yield* new AuthError({
-            message: "The authenticated token is missing required scope: orchestration:read.",
-            status: 403,
-          });
-        }
-        return yield* httpEffect.pipe(
-          Effect.provideService(EnvironmentOrchestrationReadPrincipal, session),
-        );
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError));
-  }),
-);
-
-export const environmentOrchestrationOperationAuthLayer = Layer.effect(
-  EnvironmentOrchestrationOperationAuth,
-  Effect.gen(function* () {
-    const serverAuth = yield* ServerAuth;
-    return (httpEffect) =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const session = yield* serverAuth.authenticateHttpRequest(request);
-        if (!session.scopes.includes(AuthOrchestrationOperateScope)) {
-          return yield* new AuthError({
-            message: "The authenticated token is missing required scope: orchestration:operate.",
-            status: 403,
-          });
-        }
-        return yield* httpEffect.pipe(
-          Effect.provideService(EnvironmentOrchestrationOperationPrincipal, session),
-        );
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError));
-  }),
-);
-
-export const environmentAccessManagementAuthLayer = Layer.effect(
-  EnvironmentAccessManagementAuth,
-  Effect.gen(function* () {
-    const serverAuth = yield* ServerAuth;
-    return (httpEffect) =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const session = yield* serverAuth.authenticateHttpRequest(request);
-        if (!session.scopes.includes(AuthAccessManageScope)) {
-          return yield* new AuthError({
-            message: "The authenticated token is missing required scope: access:manage.",
-            status: 403,
-          });
-        }
-        return yield* httpEffect.pipe(
-          Effect.provideService(EnvironmentAccessManagementPrincipal, session),
-        );
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError));
-  }),
-);
-
-export const environmentRelayManagementAuthLayer = Layer.effect(
-  EnvironmentRelayManagementAuth,
-  Effect.gen(function* () {
-    const serverAuth = yield* ServerAuth;
-    return (httpEffect) =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const session = yield* serverAuth.authenticateHttpRequest(request);
-        if (!session.scopes.includes(AuthRelayManageScope)) {
-          return yield* new AuthError({
-            message: "The authenticated token is missing required scope: relay:manage.",
-            status: 403,
-          });
-        }
-        return yield* httpEffect.pipe(
-          Effect.provideService(EnvironmentRelayManagementPrincipal, session),
-        );
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError));
+      }).pipe(Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError));
   }),
 );
 
@@ -207,9 +126,8 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         ).pipe(
           Effect.mapError(
             (cause) =>
-              new AuthError({
+              new ServerAuthInternalError({
                 message: "Failed to create browser session response.",
-                status: 500,
                 cause,
               }),
           ),
@@ -220,7 +138,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         );
         return result.response;
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const tokenHandler = Effect.fn("environment.auth.token")(
@@ -238,9 +156,8 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           ]),
         });
         if (requestedScopes === null) {
-          return yield* new AuthError({
+          return yield* new EnvironmentHttpBadRequestError({
             message: "Requested token scope is invalid.",
-            status: 400,
           });
         }
         return yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
@@ -249,7 +166,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           deriveAuthClientMetadata({ request }),
         );
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const webSocketTicketHandler = Effect.fn("environment.auth.webSocketTicket")(
@@ -257,58 +174,61 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         const session = yield* EnvironmentAuthenticatedPrincipal;
         return yield* serverAuth.issueWebSocketTicket(session);
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const pairingCredentialHandler = Effect.fn("environment.auth.pairingCredential")(
       function* (input: { readonly payload: AuthCreatePairingCredentialInput }) {
+        yield* requireEnvironmentScope(AuthAccessManageScope);
         return yield* serverAuth.issuePairingCredential(input.payload);
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const pairingLinksHandler = Effect.fn("environment.auth.pairingLinks")(
       function* () {
+        yield* requireEnvironmentScope(AuthAccessManageScope);
         return yield* serverAuth.listPairingLinks();
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const revokePairingLinkHandler = Effect.fn("environment.auth.revokePairingLink")(
       function* (input: { readonly payload: AuthRevokePairingLinkInput }) {
+        yield* requireEnvironmentScope(AuthAccessManageScope);
         const revoked = yield* serverAuth.revokePairingLink(input.payload.id);
         return { revoked };
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const clientsHandler = Effect.fn("environment.auth.clients")(
       function* () {
-        const session = yield* EnvironmentAccessManagementPrincipal;
+        const session = yield* requireEnvironmentScope(AuthAccessManageScope);
         return yield* serverAuth.listClientSessions(session.sessionId);
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const revokeClientHandler = Effect.fn("environment.auth.revokeClient")(
       function* (input: { readonly payload: AuthRevokeClientSessionInput }) {
-        const session = yield* EnvironmentAccessManagementPrincipal;
+        const session = yield* requireEnvironmentScope(AuthAccessManageScope);
         const revoked = yield* serverAuth.revokeClientSession(
           session.sessionId,
           input.payload.sessionId,
         );
         return { revoked };
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const revokeOtherClientsHandler = Effect.fn("environment.auth.revokeOtherClients")(
       function* () {
-        const session = yield* EnvironmentAccessManagementPrincipal;
+        const session = yield* requireEnvironmentScope(AuthAccessManageScope);
         const revokedCount = yield* serverAuth.revokeOtherClientSessions(session.sessionId);
         return { revokedCount };
       },
-      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     return handlers

@@ -1,25 +1,20 @@
 import {
-  AuthAccessTokenResult,
-  AuthAccessTokenType,
-  AuthEnvironmentBootstrapTokenType,
-  AuthStandardClientScopes,
-  AuthTokenExchangeGrantType,
-  AuthSessionState,
-  AuthWebSocketTicketResult,
   type AuthAccessTokenResult as AuthAccessTokenResultType,
   type AuthSessionState as AuthSessionStateType,
   type AuthWebSocketTicketResult as AuthWebSocketTicketResultType,
-  ExecutionEnvironmentDescriptor,
   type ExecutionEnvironmentDescriptor as ExecutionEnvironmentDescriptorType,
 } from "@t3tools/contracts";
-import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
-import { SshHttpBridgeError } from "@t3tools/ssh/errors";
-import { fetchLoopbackSshJson } from "@t3tools/ssh/tunnel";
+import {
+  bootstrapRemoteBearerSession,
+  fetchRemoteEnvironmentDescriptor,
+  fetchRemoteSessionState,
+  issueRemoteWebSocketTicket,
+} from "@t3tools/client-runtime";
+import { resolveLoopbackSshHttpBaseUrl } from "@t3tools/ssh/tunnel";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 
 export type DesktopSshRemoteApiOperation =
@@ -30,7 +25,7 @@ export type DesktopSshRemoteApiOperation =
 
 export class DesktopSshRemoteApiError extends Data.TaggedError("DesktopSshRemoteApiError")<{
   readonly operation: DesktopSshRemoteApiOperation;
-  readonly cause: SshHttpBridgeError | Schema.SchemaError;
+  readonly cause: unknown;
 }> {
   override get message() {
     return `SSH remote API request failed during ${this.operation}.`;
@@ -60,16 +55,9 @@ export class DesktopSshRemoteApi extends Context.Service<
   DesktopSshRemoteApiShape
 >()("@t3tools/desktop/ssh/DesktopSshRemoteApi") {}
 
-const decodeExecutionEnvironmentDescriptor = Schema.decodeUnknownEffect(
-  ExecutionEnvironmentDescriptor,
-);
-const decodeAuthAccessTokenResult = Schema.decodeUnknownEffect(AuthAccessTokenResult);
-const decodeAuthSessionState = Schema.decodeUnknownEffect(AuthSessionState);
-const decodeAuthWebSocketTicketResult = Schema.decodeUnknownEffect(AuthWebSocketTicketResult);
-
 const mapError =
   (operation: DesktopSshRemoteApiOperation) =>
-  (cause: SshHttpBridgeError | Schema.SchemaError): DesktopSshRemoteApiError =>
+  (cause: unknown): DesktopSshRemoteApiError =>
     new DesktopSshRemoteApiError({ operation, cause });
 
 const make = Effect.gen(function* () {
@@ -77,58 +65,51 @@ const make = Effect.gen(function* () {
   const provideHttpClient = <A, E>(effect: Effect.Effect<A, E, HttpClient.HttpClient>) =>
     effect.pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
 
+  const fetchEnvironmentDescriptor = Effect.fn("desktop.sshRemoteApi.fetchEnvironmentDescriptor")(
+    function* ({ httpBaseUrl }: { readonly httpBaseUrl: string }) {
+      return yield* fetchRemoteEnvironmentDescriptor({
+        httpBaseUrl: yield* resolveLoopbackSshHttpBaseUrl(httpBaseUrl),
+      });
+    },
+    Effect.mapError(mapError("fetch-environment-descriptor")),
+    provideHttpClient,
+  );
+  const bootstrapBearerSession = Effect.fn("desktop.sshRemoteApi.bootstrapBearerSession")(
+    function* (input: { readonly httpBaseUrl: string; readonly credential: string }) {
+      return yield* bootstrapRemoteBearerSession({
+        httpBaseUrl: yield* resolveLoopbackSshHttpBaseUrl(input.httpBaseUrl),
+        credential: input.credential,
+      });
+    },
+    Effect.mapError(mapError("bootstrap-bearer-session")),
+    provideHttpClient,
+  );
+  const fetchSessionState = Effect.fn("desktop.sshRemoteApi.fetchSessionState")(
+    function* (input: { readonly httpBaseUrl: string; readonly bearerToken: string }) {
+      return yield* fetchRemoteSessionState({
+        httpBaseUrl: yield* resolveLoopbackSshHttpBaseUrl(input.httpBaseUrl),
+        bearerToken: input.bearerToken,
+      });
+    },
+    Effect.mapError(mapError("fetch-session-state")),
+    provideHttpClient,
+  );
+  const issueWebSocketTicket = Effect.fn("desktop.sshRemoteApi.issueWebSocketTicket")(
+    function* (input: { readonly httpBaseUrl: string; readonly bearerToken: string }) {
+      return yield* issueRemoteWebSocketTicket({
+        httpBaseUrl: yield* resolveLoopbackSshHttpBaseUrl(input.httpBaseUrl),
+        bearerToken: input.bearerToken,
+      });
+    },
+    Effect.mapError(mapError("issue-websocket-ticket")),
+    provideHttpClient,
+  );
+
   return DesktopSshRemoteApi.of({
-    fetchEnvironmentDescriptor: ({ httpBaseUrl }) =>
-      fetchLoopbackSshJson<unknown>({
-        httpBaseUrl,
-        pathname: "/.well-known/t3/environment",
-      }).pipe(
-        Effect.flatMap(decodeExecutionEnvironmentDescriptor),
-        Effect.mapError(mapError("fetch-environment-descriptor")),
-        provideHttpClient,
-        Effect.withSpan("desktop.sshRemoteApi.fetchEnvironmentDescriptor"),
-      ),
-    bootstrapBearerSession: ({ httpBaseUrl, credential }) =>
-      fetchLoopbackSshJson<unknown>({
-        httpBaseUrl,
-        pathname: "/oauth/token",
-        method: "POST",
-        formBody: new URLSearchParams({
-          grant_type: AuthTokenExchangeGrantType,
-          subject_token: credential,
-          subject_token_type: AuthEnvironmentBootstrapTokenType,
-          requested_token_type: AuthAccessTokenType,
-          scope: encodeOAuthScope(AuthStandardClientScopes),
-        }),
-      }).pipe(
-        Effect.flatMap(decodeAuthAccessTokenResult),
-        Effect.mapError(mapError("bootstrap-bearer-session")),
-        provideHttpClient,
-        Effect.withSpan("desktop.sshRemoteApi.bootstrapBearerSession"),
-      ),
-    fetchSessionState: ({ httpBaseUrl, bearerToken }) =>
-      fetchLoopbackSshJson<unknown>({
-        httpBaseUrl,
-        pathname: "/api/auth/session",
-        bearerToken,
-      }).pipe(
-        Effect.flatMap(decodeAuthSessionState),
-        Effect.mapError(mapError("fetch-session-state")),
-        provideHttpClient,
-        Effect.withSpan("desktop.sshRemoteApi.fetchSessionState"),
-      ),
-    issueWebSocketTicket: ({ httpBaseUrl, bearerToken }) =>
-      fetchLoopbackSshJson<unknown>({
-        httpBaseUrl,
-        pathname: "/api/auth/websocket-ticket",
-        method: "POST",
-        bearerToken,
-      }).pipe(
-        Effect.flatMap(decodeAuthWebSocketTicketResult),
-        Effect.mapError(mapError("issue-websocket-ticket")),
-        provideHttpClient,
-        Effect.withSpan("desktop.sshRemoteApi.issueWebSocketTicket"),
-      ),
+    fetchEnvironmentDescriptor,
+    bootstrapBearerSession,
+    fetchSessionState,
+    issueWebSocketTicket,
   });
 });
 

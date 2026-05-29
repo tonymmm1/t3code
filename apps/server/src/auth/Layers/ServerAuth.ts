@@ -3,6 +3,9 @@ import {
   AuthAccessTokenType,
   AuthAdministrativeScopes,
   AuthStandardClientScopes,
+  EnvironmentHttpBadRequestError,
+  EnvironmentHttpForbiddenError,
+  EnvironmentHttpUnauthorizedError,
   type AuthAccessTokenResult,
   type AuthClientSession,
   type AuthBrowserSessionResult,
@@ -25,7 +28,8 @@ import { ServerAuthPolicy } from "../Services/ServerAuthPolicy.ts";
 import {
   ServerAuth,
   type AuthenticatedSession,
-  AuthError,
+  ServerAuthInternalError,
+  type ServerAuthError,
   type ServerAuthShape,
 } from "../Services/ServerAuth.ts";
 import {
@@ -42,19 +46,16 @@ type BootstrapExchangeResult = {
 const AUTHORIZATION_PREFIX = "Bearer ";
 const WEBSOCKET_TICKET_QUERY_PARAM = "wsTicket";
 
-export function toBootstrapExchangeAuthError(cause: BootstrapCredentialError): AuthError {
+export function toBootstrapExchangeError(cause: BootstrapCredentialError): ServerAuthError {
   if (cause.status === 500) {
-    return new AuthError({
+    return new ServerAuthInternalError({
       message: "Failed to validate bootstrap credential.",
-      status: 500,
       cause,
     });
   }
 
-  return new AuthError({
+  return new EnvironmentHttpUnauthorizedError({
     message: "Invalid bootstrap credential.",
-    status: 401,
-    cause,
   });
 }
 
@@ -74,7 +75,9 @@ export const makeServerAuth = Effect.gen(function* () {
   const sessions = yield* SessionCredentialService;
   const descriptor = yield* policy.getDescriptor();
 
-  const authenticateToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
+  const authenticateToken = (
+    token: string,
+  ): Effect.Effect<AuthenticatedSession, EnvironmentHttpUnauthorizedError> =>
     sessions.verify(token).pipe(
       Effect.tapError((cause: SessionCredentialError) =>
         Effect.logWarning("Rejected authenticated session credential.").pipe(
@@ -91,12 +94,7 @@ export const makeServerAuth = Effect.gen(function* () {
         ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
       })),
       Effect.mapError(
-        (cause) =>
-          new AuthError({
-            message: "Unauthorized request.",
-            status: 401,
-            cause,
-          }),
+        () => new EnvironmentHttpUnauthorizedError({ message: "Unauthorized request." }),
       ),
     );
 
@@ -106,10 +104,7 @@ export const makeServerAuth = Effect.gen(function* () {
     const credential = cookieToken ?? bearerToken;
     if (!credential) {
       return Effect.fail(
-        new AuthError({
-          message: "Authentication required.",
-          status: 401,
-        }),
+        new EnvironmentHttpUnauthorizedError({ message: "Authentication required." }),
       );
     }
     return authenticateToken(credential);
@@ -127,7 +122,7 @@ export const makeServerAuth = Effect.gen(function* () {
             ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
           }) satisfies AuthSessionState,
       ),
-      Effect.catchTag("AuthError", () =>
+      Effect.catchTag("EnvironmentHttpUnauthorizedError", () =>
         Effect.succeed({
           authenticated: false,
           auth: descriptor,
@@ -140,7 +135,7 @@ export const makeServerAuth = Effect.gen(function* () {
     requestMetadata,
   ) =>
     bootstrapCredentials.consume(credential).pipe(
-      Effect.mapError(toBootstrapExchangeAuthError),
+      Effect.mapError(toBootstrapExchangeError),
       Effect.flatMap((grant) =>
         sessions
           .issue({
@@ -155,7 +150,7 @@ export const makeServerAuth = Effect.gen(function* () {
           .pipe(
             Effect.mapError(
               (cause) =>
-                new AuthError({
+                new ServerAuthInternalError({
                   message: "Failed to issue authenticated session.",
                   cause,
                 }),
@@ -179,34 +174,34 @@ export const makeServerAuth = Effect.gen(function* () {
   const exchangeBootstrapCredentialForAccessToken: ServerAuthShape["exchangeBootstrapCredentialForAccessToken"] =
     (credential, requestedScopes, requestMetadata) =>
       bootstrapCredentials.consume(credential).pipe(
-        Effect.mapError(toBootstrapExchangeAuthError),
+        Effect.mapError(toBootstrapExchangeError),
         Effect.flatMap((grant) =>
-          requestedScopes.every((scope) => grant.scopes.includes(scope))
-            ? sessions
-                .issue({
-                  method: "bearer-access-token",
-                  subject: grant.subject,
-                  scopes: requestedScopes,
-                  client: {
-                    ...requestMetadata,
-                    ...(grant.label ? { label: grant.label } : {}),
-                  },
-                })
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new AuthError({
-                        message: "Failed to issue authenticated access token.",
-                        cause,
-                      }),
-                  ),
-                )
-            : Effect.fail(
-                new AuthError({
-                  message: "Requested scope exceeds the bootstrap credential grant.",
-                  status: 400,
-                }),
-              ),
+          Effect.gen(function* () {
+            if (!requestedScopes.every((scope) => grant.scopes.includes(scope))) {
+              return yield* new EnvironmentHttpBadRequestError({
+                message: "Requested scope exceeds the bootstrap credential grant.",
+              });
+            }
+            return yield* sessions
+              .issue({
+                method: "bearer-access-token",
+                subject: grant.subject,
+                scopes: requestedScopes,
+                client: {
+                  ...requestMetadata,
+                  ...(grant.label ? { label: grant.label } : {}),
+                },
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerAuthInternalError({
+                      message: "Failed to issue authenticated access token.",
+                      cause,
+                    }),
+                ),
+              );
+          }),
         ),
         Effect.flatMap((session) =>
           DateTime.now.pipe(
@@ -241,7 +236,7 @@ export const makeServerAuth = Effect.gen(function* () {
       .pipe(
         Effect.mapError(
           (cause) =>
-            new AuthError({
+            new ServerAuthInternalError({
               message: "Failed to issue pairing credential.",
               cause,
             }),
@@ -261,7 +256,7 @@ export const makeServerAuth = Effect.gen(function* () {
     authControlPlane.listPairingLinks({ excludeSubjects: ["administrative-bootstrap"] }).pipe(
       Effect.mapError(
         (cause) =>
-          new AuthError({
+          new ServerAuthInternalError({
             message: "Failed to load pairing links.",
             cause,
           }),
@@ -272,7 +267,7 @@ export const makeServerAuth = Effect.gen(function* () {
     authControlPlane.revokePairingLink(id).pipe(
       Effect.mapError(
         (cause) =>
-          new AuthError({
+          new ServerAuthInternalError({
             message: "Failed to revoke pairing link.",
             cause,
           }),
@@ -283,7 +278,7 @@ export const makeServerAuth = Effect.gen(function* () {
     authControlPlane.listSessions().pipe(
       Effect.mapError(
         (cause) =>
-          new AuthError({
+          new ServerAuthInternalError({
             message: "Failed to load paired clients.",
             cause,
           }),
@@ -304,15 +299,14 @@ export const makeServerAuth = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       if (currentSessionId === targetSessionId) {
-        return yield* new AuthError({
+        return yield* new EnvironmentHttpForbiddenError({
           message: "Use revoke other clients to keep the current administrative session active.",
-          status: 403,
         });
       }
       return yield* authControlPlane.revokeSession(targetSessionId).pipe(
         Effect.mapError(
           (cause) =>
-            new AuthError({
+            new ServerAuthInternalError({
               message: "Failed to revoke client session.",
               cause,
             }),
@@ -326,7 +320,7 @@ export const makeServerAuth = Effect.gen(function* () {
     authControlPlane.revokeOtherSessionsExcept(currentSessionId).pipe(
       Effect.mapError(
         (cause) =>
-          new AuthError({
+          new ServerAuthInternalError({
             message: "Failed to revoke other client sessions.",
             cause,
           }),
@@ -348,7 +342,7 @@ export const makeServerAuth = Effect.gen(function* () {
     sessions.issueWebSocketToken(session.sessionId).pipe(
       Effect.mapError(
         (cause) =>
-          new AuthError({
+          new ServerAuthInternalError({
             message: "Failed to issue websocket token.",
             cause,
           }),
@@ -377,12 +371,7 @@ export const makeServerAuth = Effect.gen(function* () {
               ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
             })),
             Effect.mapError(
-              (cause) =>
-                new AuthError({
-                  message: "Unauthorized request.",
-                  status: 401,
-                  cause,
-                }),
+              () => new EnvironmentHttpUnauthorizedError({ message: "Unauthorized request." }),
             ),
           );
         }

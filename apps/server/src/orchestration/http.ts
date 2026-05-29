@@ -1,5 +1,7 @@
 import {
   type ClientOrchestrationCommand,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   EnvironmentHttpApi,
   EnvironmentHttpBadRequestError,
   EnvironmentHttpInternalServerError,
@@ -10,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { normalizeDispatchCommand } from "./Normalizer.ts";
+import { requireEnvironmentScope } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -37,6 +40,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
 
     const snapshotHandler = Effect.fn("environment.orchestration.snapshot")(
       function* () {
+        yield* requireEnvironmentScope(AuthOrchestrationReadScope);
         return yield* projectionSnapshotQuery.getSnapshot().pipe(
           Effect.mapError(
             (cause) =>
@@ -52,6 +56,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
 
     const dispatchHandler = Effect.fn("environment.orchestration.dispatch")(
       function* (input: { readonly payload: ClientOrchestrationCommand }) {
+        yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
         const normalizedCommand = yield* normalizeDispatchCommand(input.payload);
         return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
           Effect.mapError(
