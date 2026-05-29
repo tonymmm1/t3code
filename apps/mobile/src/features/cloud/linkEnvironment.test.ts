@@ -410,7 +410,7 @@ describe("mobile cloud link environment client", () => {
             issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
             token_type: "DPoP",
             expires_in: 3600,
-            scope: "remote:session",
+            scope: "orchestration:read orchestration:operate terminal:operate review:write",
           }),
         );
       });
@@ -762,14 +762,14 @@ describe("mobile cloud link environment client", () => {
               }),
             );
           }
-          if (String(url).endsWith("/api/auth/token")) {
+          if (String(url).endsWith("/oauth/token")) {
             return Promise.resolve(
               Response.json({
                 access_token: "environment-dpop-token",
                 issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
                 token_type: "DPoP",
                 expires_in: 3600,
-                scope: "remote:session",
+                scope: "orchestration:read orchestration:operate terminal:operate review:write",
               }),
             );
           }
@@ -822,7 +822,7 @@ describe("mobile cloud link environment client", () => {
         });
         expect(createProofMock).toHaveBeenCalledWith({
           method: "POST",
-          url: "https://desktop.example.test/api/auth/token",
+          url: "https://desktop.example.test/oauth/token",
         });
       }),
   );

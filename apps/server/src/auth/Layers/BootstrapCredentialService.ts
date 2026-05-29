@@ -1,4 +1,8 @@
-import type { AuthPairingLink } from "@t3tools/contracts";
+import {
+  AuthAdministrativeScopes,
+  AuthStandardClientScopes,
+  type AuthPairingLink,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -39,6 +43,8 @@ type ConsumeResult =
 const DEFAULT_ONE_TIME_TOKEN_TTL_MINUTES = Duration.minutes(5);
 const PAIRING_TOKEN_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const PAIRING_TOKEN_LENGTH = 12;
+const PAIRING_TOKEN_REJECTION_LIMIT =
+  Math.floor(256 / PAIRING_TOKEN_ALPHABET.length) * PAIRING_TOKEN_ALPHABET.length;
 
 export const makeBootstrapCredentialService = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -46,13 +52,22 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
   const pairingLinks = yield* AuthPairingLinkRepository;
   const seededGrantsRef = yield* Ref.make(new Map<string, StoredBootstrapGrant>());
   const changesPubSub = yield* PubSub.unbounded<BootstrapCredentialChange>();
-  const generatePairingToken = crypto
-    .randomBytes(PAIRING_TOKEN_LENGTH)
-    .pipe(
-      Effect.map((bytes) =>
-        Array.from(bytes, (value) => PAIRING_TOKEN_ALPHABET[value & 31]).join(""),
-      ),
-    );
+  const generatePairingToken = Effect.gen(function* () {
+    let credential = "";
+    while (credential.length < PAIRING_TOKEN_LENGTH) {
+      const bytes = yield* crypto.randomBytes(PAIRING_TOKEN_LENGTH);
+      for (const byte of bytes) {
+        if (byte >= PAIRING_TOKEN_REJECTION_LIMIT) {
+          continue;
+        }
+        credential += PAIRING_TOKEN_ALPHABET[byte % PAIRING_TOKEN_ALPHABET.length]!;
+        if (credential.length === PAIRING_TOKEN_LENGTH) {
+          return credential;
+        }
+      }
+    }
+    return credential;
+  });
 
   const invalidBootstrapCredentialError = (message: string) =>
     new BootstrapCredentialError({
@@ -90,7 +105,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
     const now = yield* DateTime.now;
     yield* seedGrant(config.desktopBootstrapToken, {
       method: "desktop-bootstrap",
-      role: "owner",
+      scopes: AuthAdministrativeScopes,
       subject: "desktop-bootstrap",
       expiresAt: DateTime.add(now, {
         milliseconds: Duration.toMillis(DEFAULT_ONE_TIME_TOKEN_TTL_MINUTES),
@@ -112,7 +127,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
           ? ({
               id: row.id,
               credential: row.credential,
-              role: row.role,
+              scopes: row.scopes,
               subject: row.subject,
               label: row.label,
               createdAt: row.createdAt,
@@ -121,7 +136,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
           : ({
               id: row.id,
               credential: row.credential,
-              role: row.role,
+              scopes: row.scopes,
               subject: row.subject,
               createdAt: row.createdAt,
               expiresAt: row.expiresAt,
@@ -160,7 +175,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
         id,
         credential,
         method: "one-time-token",
-        role: input?.role ?? "client",
+        scopes: input?.scopes ?? AuthStandardClientScopes,
         subject: input?.subject ?? "one-time-token",
         label: input?.label ?? null,
         proofKeyThumbprint: input?.proofKeyThumbprint ?? null,
@@ -170,7 +185,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
       yield* emitUpsert({
         id,
         credential,
-        role: input?.role ?? "client",
+        scopes: input?.scopes ?? AuthStandardClientScopes,
         subject: input?.subject ?? "one-time-token",
         ...(input?.label ? { label: input.label } : {}),
         createdAt: now,
@@ -238,7 +253,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
               _tag: "success",
               grant: {
                 method: grant.method,
-                role: grant.role,
+                scopes: grant.scopes,
                 subject: grant.subject,
                 ...(grant.label ? { label: grant.label } : {}),
                 ...(grant.proofKeyThumbprint
@@ -270,7 +285,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
         yield* emitRemoved(consumed.value.id);
         return {
           method: consumed.value.method,
-          role: consumed.value.role,
+          scopes: consumed.value.scopes,
           subject: consumed.value.subject,
           ...(consumed.value.label ? { label: consumed.value.label } : {}),
           ...(consumed.value.proofKeyThumbprint

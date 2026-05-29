@@ -4,6 +4,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "node:crypto";
 
 import {
+  AuthAccessTokenType,
+  AuthEnvironmentBootstrapTokenType,
+  AuthTokenExchangeGrantType,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -829,7 +832,7 @@ const bootstrapBrowserSession = (
   },
 ) =>
   Effect.gen(function* () {
-    const bootstrapUrl = yield* getHttpServerUrl("/api/auth/bootstrap");
+    const bootstrapUrl = yield* getHttpServerUrl("/api/auth/browser-session");
     const response = yield* fetchEffect(bootstrapUrl, {
       method: "POST",
       headers: {
@@ -852,28 +855,37 @@ const bootstrapBrowserSession = (
     };
   });
 
-const bootstrapBearerSession = (
+const exchangeAccessToken = (
   credential = defaultDesktopBootstrapToken,
   options?: {
     readonly headers?: Record<string, string>;
-    readonly body?: Record<string, unknown>;
+    readonly scope?: string;
   },
 ) =>
   Effect.gen(function* () {
-    const bootstrapUrl = yield* getHttpServerUrl("/api/auth/bootstrap/bearer");
-    const response = yield* fetchEffect(bootstrapUrl, {
+    const tokenUrl = yield* getHttpServerUrl("/oauth/token");
+    const response = yield* fetchEffect(tokenUrl, {
       method: "POST",
       headers: {
-        "content-type": "application/json",
+        "content-type": "application/x-www-form-urlencoded",
         ...options?.headers,
       },
-      body: jsonRequestBody(options?.body ?? { credential }),
+      body: new URLSearchParams({
+        grant_type: AuthTokenExchangeGrantType,
+        subject_token: credential,
+        subject_token_type: AuthEnvironmentBootstrapTokenType,
+        requested_token_type: AuthAccessTokenType,
+        scope:
+          options?.scope ??
+          "orchestration:read orchestration:operate terminal:operate review:write access:manage relay:manage",
+      }).toString(),
     });
     const body = yield* responseJsonEffect<{
-      readonly authenticated: boolean;
-      readonly sessionMethod: string;
-      readonly expiresAt: string;
-      readonly sessionToken?: string;
+      readonly access_token?: string;
+      readonly issued_token_type?: string;
+      readonly token_type?: string;
+      readonly expires_in?: number;
+      readonly scope?: string;
       readonly _tag?: string;
       readonly message?: string;
     }>(response);
@@ -1081,20 +1093,20 @@ const getAuthenticatedSessionCookieHeader = (credential = defaultDesktopBootstra
 
 const getAuthenticatedBearerSessionToken = (credential = defaultDesktopBootstrapToken) =>
   Effect.gen(function* () {
-    const { response, body } = yield* bootstrapBearerSession(credential);
+    const { response, body } = yield* exchangeAccessToken(credential);
     if (!responseOk(response)) {
       return yield* new AuthenticationGetterError({
         message: `Expected bearer bootstrap response to succeed, got ${response.status}`,
       });
     }
 
-    if (!body.sessionToken) {
+    if (!body.access_token) {
       return yield* new AuthenticationGetterError({
-        message: "Expected bearer bootstrap response to include a session token.",
+        message: "Expected token exchange response to include an access token.",
       });
     }
 
-    return body.sessionToken;
+    return body.access_token;
   });
 
 const extractSessionTokenFromSetCookie = (cookieHeader: string): string => {
@@ -1286,7 +1298,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(body.auth.bootstrapMethods, ["desktop-bootstrap"]);
       assert.deepEqual(body.auth.sessionMethods, [
         "browser-session-cookie",
-        "bearer-session-token",
+        "bearer-access-token",
         "dpop-access-token",
       ]);
       assert.isTrue(body.auth.sessionCookieName.startsWith("t3_session_"));
@@ -1326,36 +1338,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect(
-    "bootstraps a bearer session and authenticates the session endpoint via authorization header",
-    () =>
-      Effect.gen(function* () {
-        yield* buildAppUnderTest();
+  it.effect("exchanges a bootstrap grant for a scoped bearer access token", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
 
-        const { response: bootstrapResponse, body: bootstrapBody } =
-          yield* bootstrapBearerSession();
+      const { response: tokenResponse, body: tokenBody } = yield* exchangeAccessToken();
 
-        assert.equal(bootstrapResponse.status, 200);
-        assert.equal(bootstrapBody.authenticated, true);
-        assert.equal(bootstrapBody.sessionMethod, "bearer-session-token");
-        assert.equal(typeof bootstrapBody.sessionToken, "string");
-        assert.isTrue((bootstrapBody.sessionToken?.length ?? 0) > 0);
+      assert.equal(tokenResponse.status, 200);
+      assert.equal(tokenBody.issued_token_type, AuthAccessTokenType);
+      assert.equal(tokenBody.token_type, "Bearer");
+      assert.equal(
+        tokenBody.scope,
+        "orchestration:read orchestration:operate terminal:operate review:write access:manage relay:manage",
+      );
+      assert.equal(typeof tokenBody.access_token, "string");
 
-        const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
-        const sessionResponse = yield* fetchEffect(sessionUrl, {
-          headers: {
-            authorization: `Bearer ${bootstrapBody.sessionToken ?? ""}`,
-          },
-        });
-        const sessionBody = yield* responseJsonEffect<{
-          readonly authenticated: boolean;
-          readonly sessionMethod?: string;
-        }>(sessionResponse);
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      const sessionResponse = yield* fetchEffect(sessionUrl, {
+        headers: {
+          authorization: `Bearer ${tokenBody.access_token ?? ""}`,
+        },
+      });
+      const sessionBody = yield* responseJsonEffect<{
+        readonly authenticated: boolean;
+        readonly sessionMethod?: string;
+        readonly scopes?: ReadonlyArray<string>;
+      }>(sessionResponse);
 
-        assert.equal(sessionResponse.status, 200);
-        assert.equal(sessionBody.authenticated, true);
-        assert.equal(sessionBody.sessionMethod, "bearer-session-token");
-      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionBody.authenticated, true);
+      assert.equal(sessionBody.sessionMethod, "bearer-access-token");
+      assert.deepEqual(sessionBody.scopes, [
+        "orchestration:read",
+        "orchestration:operate",
+        "terminal:operate",
+        "review:write",
+        "access:manage",
+        "relay:manage",
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(
@@ -1370,7 +1391,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           body: yield* HttpBody.json({}),
         });
         const credential = (yield* credentialResponse.json) as { readonly credential: string };
-        const tokenUrl = yield* getHttpServerUrl("/api/auth/token");
+        const tokenUrl = yield* getHttpServerUrl("/oauth/token");
         const now = yield* DateTime.now;
         const tokenProof = makeDpopProof({
           method: "POST",
@@ -1389,8 +1410,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             subject_token: credential.credential,
             subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
             requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-            resource: new URL(tokenUrl).origin,
-            scope: "remote:session",
+            scope: "orchestration:read orchestration:operate terminal:operate review:write",
           }).toString(),
         });
         const token = yield* responseJsonEffect<{
@@ -1435,7 +1455,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("rejects replayed DPoP proofs across bearer bootstrap credentials", () =>
+  it.effect("rejects replayed DPoP proofs across token exchanges", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
@@ -1458,31 +1478,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const secondCredential = (yield* secondCredentialResponse.json) as {
         readonly credential: string;
       };
-      const bootstrapUrl = yield* getHttpServerUrl("/api/auth/bootstrap/bearer");
+      const tokenUrl = yield* getHttpServerUrl("/oauth/token");
       const now = yield* DateTime.now;
       const dpop = makeDpopProof({
         method: "POST",
-        url: bootstrapUrl,
+        url: tokenUrl,
         iat: Math.floor(now.epochMilliseconds / 1_000),
       });
 
-      const firstBootstrap = yield* bootstrapBearerSession(firstCredential.credential, {
+      const firstBootstrap = yield* exchangeAccessToken(firstCredential.credential, {
         headers: {
           dpop: dpop.proof,
         },
-        body: {
-          credential: firstCredential.credential,
-          proofKeyThumbprint: dpop.thumbprint,
-        },
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       });
-      const replayBootstrap = yield* bootstrapBearerSession(secondCredential.credential, {
+      const replayBootstrap = yield* exchangeAccessToken(secondCredential.credential, {
         headers: {
           dpop: dpop.proof,
         },
-        body: {
-          credential: secondCredential.credential,
-          proofKeyThumbprint: dpop.thumbprint,
-        },
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       });
 
       assert.equal(firstBootstrap.response.status, 200);
@@ -1491,7 +1505,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("ignores forwarded host headers when validating bearer bootstrap DPoP URLs", () =>
+  it.effect("ignores forwarded host headers when validating token exchange DPoP URLs", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
@@ -1505,31 +1519,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const credential = (yield* credentialResponse.json) as {
         readonly credential: string;
       };
-      const bootstrapUrl = yield* getHttpServerUrl("/api/auth/bootstrap/bearer");
+      const tokenUrl = yield* getHttpServerUrl("/oauth/token");
       const now = yield* DateTime.now;
       const dpop = makeDpopProof({
         method: "POST",
-        url: bootstrapUrl,
+        url: tokenUrl,
         iat: Math.floor(now.epochMilliseconds / 1_000),
       });
 
-      const bootstrap = yield* bootstrapBearerSession(credential.credential, {
+      const bootstrap = yield* exchangeAccessToken(credential.credential, {
         headers: {
           dpop: dpop.proof,
           "x-forwarded-host": "environment.example.test",
         },
-        body: {
-          credential: credential.credential,
-          proofKeyThumbprint: dpop.thumbprint,
-        },
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       });
 
       assert.equal(bootstrap.response.status, 200);
-      assert.equal(bootstrap.body.authenticated, true);
+      assert.equal(bootstrap.body.token_type, "DPoP");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("rejects bearer bootstrap DPoP proofs bound to spoofed forwarded hosts", () =>
+  it.effect("rejects token exchange DPoP proofs bound to spoofed forwarded hosts", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
@@ -1543,8 +1554,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const credential = (yield* credentialResponse.json) as {
         readonly credential: string;
       };
-      const bootstrapUrl = yield* getHttpServerUrl("/api/auth/bootstrap/bearer");
-      const spoofedUrl = new URL(bootstrapUrl);
+      const tokenUrl = yield* getHttpServerUrl("/oauth/token");
+      const spoofedUrl = new URL(tokenUrl);
       spoofedUrl.hostname = "environment.example.test";
       const now = yield* DateTime.now;
       const dpop = makeDpopProof({
@@ -1553,15 +1564,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         iat: Math.floor(now.epochMilliseconds / 1_000),
       });
 
-      const bootstrap = yield* bootstrapBearerSession(credential.credential, {
+      const bootstrap = yield* exchangeAccessToken(credential.credential, {
         headers: {
           dpop: dpop.proof,
           "x-forwarded-host": spoofedUrl.host,
         },
-        body: {
-          credential: credential.credential,
-          proofKeyThumbprint: dpop.thumbprint,
-        },
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       });
 
       assert.equal(bootstrap.response.status, 401);
@@ -2833,27 +2841,27 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("issues short-lived websocket tokens for authenticated bearer sessions", () =>
+  it.effect("issues short-lived websocket tickets for authenticated bearer sessions", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
       const bearerToken = yield* getAuthenticatedBearerSessionToken();
-      const wsTokenUrl = yield* getHttpServerUrl("/api/auth/ws-token");
-      const wsTokenResponse = yield* fetchEffect(wsTokenUrl, {
+      const wsTicketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const wsTicketResponse = yield* fetchEffect(wsTicketUrl, {
         method: "POST",
         headers: {
           authorization: `Bearer ${bearerToken}`,
         },
       });
-      const wsTokenBody = yield* responseJsonEffect<{
-        readonly token: string;
+      const wsTicketBody = yield* responseJsonEffect<{
+        readonly ticket: string;
         readonly expiresAt: string;
-      }>(wsTokenResponse);
+      }>(wsTicketResponse);
 
-      assert.equal(wsTokenResponse.status, 200);
-      assert.equal(typeof wsTokenBody.token, "string");
-      assert.isTrue(wsTokenBody.token.length > 0);
-      assert.equal(typeof wsTokenBody.expiresAt, "string");
+      assert.equal(wsTicketResponse.status, 200);
+      assert.equal(typeof wsTicketBody.ticket, "string");
+      assert.isTrue(wsTicketBody.ticket.length > 0);
+      assert.equal(typeof wsTicketBody.expiresAt, "string");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -2862,22 +2870,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest();
 
       const origin = crossOriginClientOrigin;
-      const { response: bootstrapResponse, body: bootstrapBody } = yield* bootstrapBearerSession(
+      const { response: tokenResponse, body: tokenBody } = yield* exchangeAccessToken(
         defaultDesktopBootstrapToken,
         {
           headers: { origin },
         },
       );
 
-      assert.equal(bootstrapResponse.status, 200);
-      assertBrowserApiCorsHeaders(bootstrapResponse.headers);
-      assert.equal(bootstrapBody.authenticated, true);
-      assert.equal(typeof bootstrapBody.sessionToken, "string");
+      assert.equal(tokenResponse.status, 200);
+      assertBrowserApiCorsHeaders(tokenResponse.headers);
+      assert.equal(tokenBody.token_type, "Bearer");
+      assert.equal(typeof tokenBody.access_token, "string");
 
       const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
       const sessionResponse = yield* fetchEffect(sessionUrl, {
         headers: {
-          authorization: `Bearer ${bootstrapBody.sessionToken ?? ""}`,
+          authorization: `Bearer ${tokenBody.access_token ?? ""}`,
           origin,
         },
       });
@@ -2889,34 +2897,34 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(sessionResponse.status, 200);
       assertBrowserApiCorsHeaders(sessionResponse.headers);
       assert.equal(sessionBody.authenticated, true);
-      assert.equal(sessionBody.sessionMethod, "bearer-session-token");
+      assert.equal(sessionBody.sessionMethod, "bearer-access-token");
 
-      const wsTokenUrl = yield* getHttpServerUrl("/api/auth/ws-token");
-      const wsTokenResponse = yield* fetchEffect(wsTokenUrl, {
+      const wsTicketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const wsTicketResponse = yield* fetchEffect(wsTicketUrl, {
         method: "POST",
         headers: {
-          authorization: `Bearer ${bootstrapBody.sessionToken ?? ""}`,
+          authorization: `Bearer ${tokenBody.access_token ?? ""}`,
           origin,
         },
       });
-      const wsTokenBody = yield* responseJsonEffect<{
-        readonly token: string;
-      }>(wsTokenResponse);
+      const wsTicketBody = yield* responseJsonEffect<{
+        readonly ticket: string;
+      }>(wsTicketResponse);
 
-      assert.equal(wsTokenResponse.status, 200);
-      assertBrowserApiCorsHeaders(wsTokenResponse.headers);
-      assert.equal(typeof wsTokenBody.token, "string");
+      assert.equal(wsTicketResponse.status, 200);
+      assertBrowserApiCorsHeaders(wsTicketResponse.headers);
+      assert.equal(typeof wsTicketBody.ticket, "string");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(
-    "responds to remote auth websocket-token preflight requests with authorization CORS headers",
+    "responds to remote auth websocket-ticket preflight requests with authorization CORS headers",
     () =>
       Effect.gen(function* () {
         yield* buildAppUnderTest();
 
-        const wsTokenUrl = yield* getHttpServerUrl("/api/auth/ws-token");
-        const response = yield* fetchEffect(wsTokenUrl, {
+        const wsTicketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+        const response = yield* fetchEffect(wsTicketUrl, {
           method: "OPTIONS",
           headers: {
             origin: crossOriginClientOrigin,
@@ -2930,12 +2938,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("includes CORS headers on remote websocket-token auth failures", () =>
+  it.effect("includes CORS headers on remote websocket-ticket auth failures", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
-      const wsTokenUrl = yield* getHttpServerUrl("/api/auth/ws-token");
-      const response = yield* fetchEffect(wsTokenUrl, {
+      const wsTicketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+      const response = yield* fetchEffect(wsTicketUrl, {
         method: "POST",
         headers: {
           origin: crossOriginClientOrigin,
@@ -2981,7 +2989,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("issues pairing credentials for owner bearer sessions", () =>
+  it.effect("issues pairing credentials for bearer sessions with access management scope", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
@@ -3014,7 +3022,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("lists and revokes pairing links for owner sessions", () =>
+  it.effect("lists and revokes pairing links for access management sessions", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         config: {
@@ -3061,7 +3069,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("rejects pairing credential requests from non-owner paired sessions", () =>
+  it.effect("rejects pairing credential requests without access management scope", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         config: {
@@ -3094,11 +3102,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(pairedResponse.status, 403);
       assert.equal(pairedBody._tag, "EnvironmentHttpForbiddenError");
-      assert.equal(pairedBody.message, "Only owner sessions can manage network access.");
+      assert.equal(
+        pairedBody.message,
+        "The authenticated token is missing required scope: access:manage.",
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("lists paired clients and revokes other sessions while keeping the owner", () =>
+  it.effect("lists paired clients and revokes other sessions while keeping the administrator", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         config: {
@@ -3344,23 +3355,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   );
 
   it.effect(
-    "accepts websocket rpc handshake with a dedicated websocket token in the query string",
+    "accepts websocket rpc handshake with a dedicated websocket ticket in the query string",
     () =>
       Effect.gen(function* () {
         yield* buildAppUnderTest();
 
         const bearerToken = yield* getAuthenticatedBearerSessionToken();
-        const wsTokenUrl = yield* getHttpServerUrl("/api/auth/ws-token");
-        const wsTokenResponse = yield* fetchEffect(wsTokenUrl, {
+        const wsTicketUrl = yield* getHttpServerUrl("/api/auth/websocket-ticket");
+        const wsTicketResponse = yield* fetchEffect(wsTicketUrl, {
           method: "POST",
           headers: {
             authorization: `Bearer ${bearerToken}`,
           },
         });
-        const wsTokenBody = yield* responseJsonEffect<{
-          readonly token: string;
-        }>(wsTokenResponse);
-        const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsToken=${encodeURIComponent(wsTokenBody.token)}`;
+        const wsTicketBody = yield* responseJsonEffect<{
+          readonly ticket: string;
+        }>(wsTicketResponse);
+        const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
 
         const response = yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),

@@ -193,7 +193,7 @@ describe("web cloud link environment client", () => {
             issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
             token_type: "DPoP",
             expires_in: 3600,
-            scope: "remote:session",
+            scope: "orchestration:read orchestration:operate terminal:operate review:write",
           }),
         );
       vi.stubGlobal("fetch", fetchMock);
@@ -213,7 +213,7 @@ describe("web cloud link environment client", () => {
       expect(fetchMock.mock.calls[1]?.[1]?.headers.dpop).toBe("web-dpop-proof");
       expect(createProofMock).toHaveBeenCalledWith({
         method: "POST",
-        url: "https://managed.example.test/api/auth/token",
+        url: "https://managed.example.test/oauth/token",
       });
     }),
   );

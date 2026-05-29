@@ -249,7 +249,7 @@ export function connectSavedEnvironment(
                 const signer = yield* ManagedRelayDpopSigner;
                 const dpop = yield* signer.createProof({
                   method: "POST",
-                  url: remoteEndpointUrl(connection.httpBaseUrl, "/api/auth/ws-token"),
+                  url: remoteEndpointUrl(connection.httpBaseUrl, "/api/auth/websocket-ticket"),
                   accessToken: dpopAccessToken,
                 });
                 return yield* resolveRemoteDpopWebSocketConnectionUrl({

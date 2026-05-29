@@ -461,7 +461,7 @@
             T3 Cloud must not proxy normal app traffic. It brokers identity, provisioning, grants,
             endpoint records, and connect tickets. To connect a client, T3 Cloud sends a short-lived
             signed mint request through the managed endpoint to the target local T3 server. After
-            bootstrap, clients talk directly to
+            token exchange, clients talk directly to
             <code>https://env_abc.tunnels.t3code.com</code> and
             <code>wss://env_abc.tunnels.t3code.com/ws</code>.
           </div>
@@ -479,8 +479,8 @@
             Keychain/state dir; public key registered with T3 Cloud.
           </p>
           <p>
-            <strong>4. Local server authority</strong><br />Owner-only local auth mints single-use
-            bootstrap credentials.
+            <strong>4. Local server authority</strong><br />Local tokens carrying
+            <code>relay:manage</code> mint single-use bootstrap credentials.
           </p>
           <p>
             <strong>5. Managed endpoint runtime credential</strong><br />Endpoint runtime credential
@@ -530,23 +530,23 @@
               <td>Prove the real linked environment responded or reported status.</td>
             </tr>
             <tr>
-              <td>Client -> local T3 bootstrap</td>
+              <td>Client -> local T3 token exchange</td>
               <td>HTTPS through managed endpoint</td>
               <td>Single-use bootstrap credential minted by the local T3 server.</td>
               <td>Local T3 server</td>
-              <td>Create a normal environment bearer session.</td>
+              <td>Mint a scoped proof-bound environment access token.</td>
             </tr>
             <tr>
-              <td>Client -> local T3 WS token API</td>
+              <td>Client -> local T3 WebSocket ticket API</td>
               <td>HTTPS through managed endpoint</td>
-              <td>Environment bearer session.</td>
+              <td>Scoped environment access token plus DPoP proof.</td>
               <td>Local T3 server</td>
-              <td>Mint a short-lived token for one WebSocket connection.</td>
+              <td>Mint a short-lived ticket for one WebSocket connection.</td>
             </tr>
             <tr>
               <td>Client -> local T3 WebSocket</td>
               <td>WSS through managed endpoint</td>
-              <td><code>wsToken</code> query parameter.</td>
+              <td><code>wsTicket</code> query parameter.</td>
               <td>Local T3 server</td>
               <td>Run the existing app RPC protocol.</td>
             </tr>
@@ -569,9 +569,9 @@
         <div class="callout warning">
           Do not add an app-session authorization dependency to Cloudflare Tunnel or T3 Relay. The
           endpoint provider may authenticate the connector, but local T3 auth remains the only
-          verifier for bootstrap credentials, bearer sessions, WebSocket tokens, and commands. The
-          endpoint runtime credential authenticates the connector to the endpoint provider; it is
-          not a client-facing access gate for the public hostname.
+          verifier for bootstrap credentials, scoped access tokens, WebSocket tickets, and commands.
+          The endpoint runtime credential authenticates the connector to the endpoint provider; it
+          is not a client-facing access gate for the public hostname.
         </div>
       </section>
 
@@ -1030,17 +1030,17 @@
               <td>Single use, short TTL, bound to environment and cloud request nonce.</td>
             </tr>
             <tr>
-              <td>Environment bearer session</td>
-              <td>Remote client after bootstrap.</td>
+              <td>Environment access token</td>
+              <td>Remote client after token exchange.</td>
               <td>Local T3 server over managed endpoint.</td>
-              <td>The client has an environment session.</td>
+              <td>The client has the granted environment scopes and proof key.</td>
               <td>Issued and revoked only by the local T3 server.</td>
             </tr>
             <tr>
-              <td>WebSocket token</td>
+              <td>WebSocket ticket</td>
               <td>Remote client, briefly.</td>
               <td>Local T3 WebSocket endpoint.</td>
-              <td>The WebSocket was opened by a client with a valid environment session.</td>
+              <td>The WebSocket was opened by a client with a valid scoped access token.</td>
               <td>Short-lived, one connection, verified by existing T3 WebSocket auth.</td>
             </tr>
             <tr>
@@ -1127,22 +1127,24 @@ Environment-signed response 200
   "signature": "env_signature_..."
 }</code></pre>
 
-        <h3>Client -> Environment: Bootstrap Existing Remote Auth</h3>
-        <pre class="diagram"><code>POST https://env_mbp.tunnels.t3code.com/api/auth/bootstrap/bearer
-DPoP: &lt;client-proof-jwt-for-bootstrap-url&gt;
-Content-Type: application/json
+        <h3>Client -> Environment: Exchange Proof-Bound Bootstrap Grant</h3>
+        <pre class="diagram"><code>POST https://env_mbp.tunnels.t3code.com/oauth/token
+DPoP: &lt;client-proof-jwt-for-token-url&gt;
+Content-Type: application/x-www-form-urlencoded
 
-{
-  "credential": "one_time_bootstrap_..."
-}
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+&amp;subject_token=one_time_bootstrap_...
+&amp;subject_token_type=urn:t3:params:oauth:token-type:environment-bootstrap
+&amp;requested_token_type=urn:ietf:params:oauth:token-type:access_token
+&amp;scope=orchestration:read%20orchestration:operate%20terminal:operate%20review:write
 
 Response 200
 {
-  "authenticated": true,
-  "role": "client",
-  "sessionMethod": "bearer-session-token",
-  "expiresAt": "2026-05-25T18:00:00.000Z",
-  "sessionToken": "env_session_..."
+  "access_token": "env_access_...",
+  "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+  "token_type": "DPoP",
+  "expires_in": 3600,
+  "scope": "orchestration:read orchestration:operate terminal:operate review:write"
 }</code></pre>
         <div class="callout">
           The client generates an ephemeral proof key before requesting connect. T3 Cloud includes
@@ -1152,13 +1154,14 @@ Response 200
         </div>
 
         <h3>Client -> Environment: Existing WebSocket Flow</h3>
-        <pre class="diagram"><code>POST https://env_mbp.tunnels.t3code.com/api/auth/ws-token
-Authorization: Bearer &lt;env_session_token&gt;
+        <pre class="diagram"><code>POST https://env_mbp.tunnels.t3code.com/api/auth/websocket-ticket
+Authorization: DPoP &lt;env_access_token&gt;
+DPoP: &lt;client-proof-jwt-for-ticket-url&gt;
 
 Response 200
-{ "token": "ws_token_...", "expiresAt": "2026-05-25T12:01:00.000Z" }
+{ "ticket": "ws_ticket_...", "expiresAt": "2026-05-25T12:01:00.000Z" }
 
-GET wss://env_mbp.tunnels.t3code.com/ws?wsToken=ws_token_...</code></pre>
+GET wss://env_mbp.tunnels.t3code.com/ws?wsTicket=ws_ticket_...</code></pre>
 
         <h3>Environment -> Cloud: Status For Notifications</h3>
         <pre class="diagram"><code>POST /v1/environments/:environmentId/status
@@ -1176,8 +1179,8 @@ Authorization: T3Environment &lt;env-signed-jwt-or-dpop-proof&gt;
 }</code></pre>
         <div class="callout">
           These contracts preserve the current app protocol. Only the cloud connect flow and the
-          local <code>/api/t3-cloud/mint-credential</code> endpoint are new. Bootstrap, bearer
-          sessions, and WebSocket tokens stay owned by the local T3 server.
+          local <code>/api/t3-cloud/mint-credential</code> endpoint are new. Bootstrap grants,
+          scoped access tokens, and WebSocket tickets stay owned by the local T3 server.
         </div>
       </section>
 
@@ -1283,14 +1286,14 @@ sequenceDiagram
   Endpoint-->>Cloud: Single-use bootstrap credential and signed response
   Cloud->>Cloud: Verify environment signature and consume connect ticket
   Cloud-->>Client: httpBaseUrl, wsBaseUrl, one-time credential
-  Client->>Endpoint: POST /api/auth/bootstrap/bearer with credential + DPoP proof
+  Client->>Endpoint: POST /oauth/token with credential, scopes, and DPoP proof
   Endpoint->>Env: Forward request to loopback origin
   Env->>Env: Verify proof matches credential key binding
-  Env-->>Endpoint: Environment session response
-  Endpoint-->>Client: Environment session response
-  Client->>Endpoint: POST /api/auth/ws-token using environment session
-  Endpoint-->>Client: Short-lived wsToken
-  Client->>Endpoint: Open WebSocket with wsToken
+  Env-->>Endpoint: Scoped DPoP access token response
+  Endpoint-->>Client: Scoped DPoP access token response
+  Client->>Endpoint: POST /api/auth/websocket-ticket using DPoP access token
+  Endpoint-->>Client: Short-lived wsTicket
+  Client->>Endpoint: Open WebSocket with wsTicket
           </pre>
           <div class="callout warning">
             T3 Cloud authorizes the account, but the environment still decides whether to mint the
@@ -1321,7 +1324,7 @@ sequenceDiagram
   Env-->>Endpoint: Single-use proof-bound bootstrap credential
   Endpoint-->>Cloud: Single-use bootstrap credential
   Cloud-->>Client: Endpoint URLs and one-time credential
-  Client->>Endpoint: Bootstrap and open environment WebSocket
+  Client->>Endpoint: Exchange grant for scoped DPoP token and open WebSocket with ticket
   Endpoint->>Env: Forward app protocol to loopback server
           </pre>
           <div class="callout">
@@ -1349,10 +1352,10 @@ sequenceDiagram
   Env-->>Endpoint: One-time proof-bound bootstrap credential
   Endpoint-->>Cloud: One-time bootstrap credential
   Cloud-->>Client: Endpoint URLs and one-time bootstrap credential
-  Client->>Endpoint: HTTPS bootstrap request with DPoP proof
+  Client->>Endpoint: HTTPS token exchange with requested scopes and DPoP proof
   Endpoint->>Env: Forward request over managed endpoint to loopback origin
-  Env-->>Endpoint: Environment session response
-  Endpoint-->>Client: Environment session established
+  Env-->>Endpoint: Scoped DPoP access token response
+  Endpoint-->>Client: Scoped DPoP access token established
   Client->>Endpoint: WebSocket RPC stream
   Endpoint->>Env: Forward WebSocket frames to existing T3 protocol
   Env-->>Endpoint: Agent chunks, status, command results
@@ -1371,7 +1374,7 @@ sequenceDiagram
           </div>
           <div class="step">
             <strong>Environment remains the boundary</strong>
-            The local T3 server authenticates the bootstrap credential, mints normal WS tokens, and
+            The local T3 server authenticates the bootstrap credential, mints WebSocket tickets, and
             can reject commands based on local policy or approval state.
           </div>
         </div>
@@ -1430,7 +1433,7 @@ sequenceDiagram
   Env-->>Endpoint: One-time bootstrap credential
   Endpoint-->>Cloud: One-time bootstrap credential
   Cloud-->>Browser: Endpoint URLs and one-time credential
-  Browser->>Endpoint: Bootstrap environment session
+  Browser->>Endpoint: Exchange bootstrap grant for scoped DPoP access token
   Endpoint->>Env: Forward to loopback local server
   Browser->>Endpoint: Open WebSocket RPC stream
   Env-->>Endpoint: Live chunks and status
@@ -1505,8 +1508,8 @@ sequenceDiagram
           </div>
           <div class="step">
             <strong>5. Hosted web</strong>
-            Sign into <code>app.t3.codes</code>. It lists the same linked environments and
-            bootstraps a direct managed-endpoint session the same way mobile does.
+            Sign into <code>app.t3.codes</code>. It lists the same linked environments and exchanges
+            for a direct managed-endpoint access token the same way mobile does.
           </div>
         </div>
       </section>
@@ -1566,7 +1569,7 @@ sequenceDiagram
           <div class="step">
             <strong>Endpoint runtime auth is not app auth</strong>
             Stealing or rotating the Cloudflare tunnel token or future relay connector token does
-            not create a valid T3 bearer session, WebSocket token, or environment-signed response.
+            not create a valid T3 access token, WebSocket ticket, or environment-signed response.
           </div>
           <div class="step">
             <strong>Bootstrap credentials are one-shot</strong>
@@ -1576,8 +1579,8 @@ sequenceDiagram
           </div>
           <div class="step">
             <strong>Existing WebSocket protocol stays unchanged</strong>
-            After bootstrap, remote clients use the same bearer-session and
-            <code>wsToken</code> flow already used for remote environments.
+            After token exchange, remote clients use scoped access tokens and the
+            <code>wsTicket</code> flow used for remote environments.
           </div>
           <div class="step">
             <strong>T3 Cloud is not in the hot path</strong>
@@ -1587,7 +1590,8 @@ sequenceDiagram
           <div class="step">
             <strong>Provider swap is observable only in endpoint metadata</strong>
             Replacing Cloudflare Tunnel with T3 Relay changes endpoint runtime provisioning and
-            provider refs, but not client bootstrap, bearer-session, or WebSocket behavior.
+            provider refs, but not client token exchange, scoped authorization, or WebSocket
+            behavior.
           </div>
         </div>
       </section>
@@ -1697,7 +1701,7 @@ sequenceDiagram
               <td>No, delivery mechanism.</td>
               <td>
                 Queue APNs jobs after status updates. Payloads are minimal and must not include full
-                agent chunks, bearer tokens, bootstrap credentials, or WebSocket tokens.
+                agent chunks, access tokens, bootstrap credentials, or WebSocket tickets.
               </td>
             </tr>
             <tr>

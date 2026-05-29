@@ -324,7 +324,7 @@ export function connectManagedCloudEnvironment(input: {
     const bootstrapProof = yield* signer
       .createProof({
         method: "POST",
-        url: new URL("/api/auth/token", connected.endpoint.httpBaseUrl).toString(),
+        url: new URL("/oauth/token", connected.endpoint.httpBaseUrl).toString(),
       })
       .pipe(
         Effect.mapError(

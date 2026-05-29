@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => {
     saveConnection: vi.fn(() => Promise.resolve()),
     saveCachedShellSnapshot: vi.fn(() => Promise.resolve()),
     mobileRunPromise: vi.fn((_effect?: unknown) =>
-      Promise.resolve("wss://desktop.example/ws?wsToken=token"),
+      Promise.resolve("wss://desktop.example/ws?wsTicket=token"),
     ),
     removeEnvironmentSession: vi.fn(() => null),
     setEnvironmentSession: vi.fn(),
@@ -152,7 +152,7 @@ const connection = {
   displayUrl: "https://desktop.example/",
   httpBaseUrl: "https://desktop.example/",
   wsBaseUrl: "wss://desktop.example/",
-  bearerToken: "bearer-session-token",
+  bearerToken: "remote-access-token",
 } as const;
 
 describe("mobile remote environment registry effects", () => {
@@ -163,10 +163,10 @@ describe("mobile remote environment registry effects", () => {
     mocks.environmentConnection.dispose.mockResolvedValue(undefined);
     mocks.sessionConnection.dispose.mockResolvedValue(undefined);
     mocks.removeEnvironmentSession.mockReturnValue(null);
-    mocks.mobileRunPromise.mockResolvedValue("wss://desktop.example/ws?wsToken=token");
+    mocks.mobileRunPromise.mockResolvedValue("wss://desktop.example/ws?wsTicket=token");
     mocks.createDpopProof.mockReturnValue(Effect.succeed("dpop-proof"));
     mocks.resolveRemoteDpopWebSocketConnectionUrl.mockReturnValue(
-      Effect.succeed("wss://desktop.example/ws?wsToken=dpop-token"),
+      Effect.succeed("wss://desktop.example/ws?wsTicket=dpop-token"),
     );
   });
 
@@ -222,7 +222,7 @@ describe("mobile remote environment registry effects", () => {
 
       expect(mocks.createDpopProof).toHaveBeenCalledWith({
         method: "POST",
-        url: "https://desktop.example/api/auth/ws-token",
+        url: "https://desktop.example/api/auth/websocket-ticket",
         accessToken: "environment-dpop-token",
       });
       expect(mocks.resolveRemoteDpopWebSocketConnectionUrl).toHaveBeenCalledWith({

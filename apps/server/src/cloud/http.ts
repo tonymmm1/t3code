@@ -1,14 +1,12 @@
 import * as NodeCrypto from "node:crypto";
 import {
+  AuthStandardClientScopes,
   EnvironmentCloudEndpointUnavailableError,
   EnvironmentCloudLinkStateResult,
   EnvironmentCloudRelayConfigResult,
   EnvironmentHttpApi,
-  EnvironmentHttpBadRequestError,
   EnvironmentHttpConflictError,
-  EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
-  EnvironmentHttpUnauthorizedError,
 } from "@t3tools/contracts";
 import {
   RelayCloudEnvironmentHealthProofPayload,
@@ -87,21 +85,7 @@ const appendCloudCredentialResponseHeaders = HttpEffect.appendPreResponseHandler
     Effect.succeed(HttpServerResponse.setHeaders(response, CLOUD_CREDENTIAL_RESPONSE_HEADERS)),
 );
 
-type EnvironmentCloudHttpError =
-  | EnvironmentHttpBadRequestError
-  | EnvironmentHttpConflictError
-  | EnvironmentHttpForbiddenError
-  | EnvironmentHttpInternalServerError
-  | EnvironmentHttpUnauthorizedError;
-
-const failEnvironmentCloudAuthError = (
-  error: AuthError,
-): Effect.Effect<never, EnvironmentCloudHttpError, HttpServerRequest.HttpServerRequest> => {
-  if (error.status === 409) {
-    return Effect.fail(new EnvironmentHttpConflictError({ message: error.message }));
-  }
-  return failEnvironmentHttpAuthError(error);
-};
+const failEnvironmentCloudAuthError = (error: AuthError) => failEnvironmentHttpAuthError(error);
 
 const failEnvironmentCloudInternalError =
   (message: string) =>
@@ -207,8 +191,16 @@ function validateRelayConfigPayload(
 function validateLinkedCloudUser(input: {
   readonly secrets: ServerSecretStoreShape;
   readonly cloudUserId: string;
-}): Effect.Effect<void, AuthError> {
+}): Effect.Effect<void, AuthError | EnvironmentHttpConflictError> {
   return input.secrets.get(CLOUD_LINKED_USER_ID).pipe(
+    Effect.mapError(
+      (cause) =>
+        new AuthError({
+          message: "Could not verify the linked cloud account.",
+          status: 500,
+          cause,
+        }),
+    ),
     Effect.flatMap((existing) => {
       if (!existing) {
         return Effect.void;
@@ -217,22 +209,12 @@ function validateLinkedCloudUser(input: {
       return existingCloudUserId === input.cloudUserId
         ? Effect.void
         : Effect.fail(
-            new AuthError({
+            new EnvironmentHttpConflictError({
               message:
                 "This environment is already linked to a different cloud account. Unlink it before switching accounts.",
-              status: 409,
             }),
           );
     }),
-    Effect.mapError((cause) =>
-      cause instanceof AuthError
-        ? cause
-        : new AuthError({
-            message: "Could not verify the linked cloud account.",
-            status: 500,
-            cause,
-          }),
-    ),
   );
 }
 
@@ -601,9 +583,8 @@ const cloudEnvironmentHealthHandler = Effect.fn("environment.cloud.health")(
       Effect.catchTag("SecretStoreError", () => Effect.succeed(false)),
     );
     if (!consumedReplayGuards) {
-      return yield* new AuthError({
+      return yield* new EnvironmentHttpConflictError({
         message: "Cloud health request was already consumed.",
-        status: 409,
       });
     }
 
@@ -723,14 +704,13 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
       Effect.catchTag("SecretStoreError", () => Effect.succeed(false)),
     );
     if (!consumedReplayGuards) {
-      return yield* new AuthError({
+      return yield* new EnvironmentHttpConflictError({
         message: "Cloud mint request was already consumed.",
-        status: 409,
       });
     }
 
     const issued = yield* dependencies.authControlPlane.createPairingLink({
-      role: "client",
+      scopes: AuthStandardClientScopes,
       subject: "cloud-connect",
       ttl: Duration.minutes(2),
       label: "T3 Cloud connect",

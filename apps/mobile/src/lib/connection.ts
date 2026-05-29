@@ -68,7 +68,7 @@ export async function bootstrapRemoteConnection(
     displayUrl: target.httpBaseUrl,
     httpBaseUrl: target.httpBaseUrl,
     wsBaseUrl: target.wsBaseUrl,
-    bearerToken: bootstrap.sessionToken,
+    bearerToken: bootstrap.access_token,
     authenticationMethod: "bearer",
   };
 }

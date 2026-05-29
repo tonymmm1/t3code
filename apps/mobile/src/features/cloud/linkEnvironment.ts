@@ -520,7 +520,7 @@ export function connectCloudEnvironment(input: {
     const bootstrapDpop = yield* signer
       .createProof({
         method: "POST",
-        url: new URL("/api/auth/token", connect.endpoint.httpBaseUrl).toString(),
+        url: new URL("/oauth/token", connect.endpoint.httpBaseUrl).toString(),
       })
       .pipe(Effect.mapError(cloudEnvironmentLinkError("Could not create bootstrap DPoP proof.")));
     const bootstrap = yield* exchangeRemoteDpopAccessToken({

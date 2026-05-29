@@ -1,7 +1,7 @@
 import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
-  AuthRemoteSessionScope,
+  AuthStandardClientScopes,
   AuthTokenExchangeGrantType,
   EnvironmentHttpApi,
   EnvironmentHttpCommonError,
@@ -12,7 +12,7 @@ import type {
   EnvironmentHttpInternalServerError,
   EnvironmentHttpUnauthorizedError,
 } from "@t3tools/contracts";
-import { oauthScopeSetEquals } from "@t3tools/shared/oauthScope";
+import { encodeOAuthScope, oauthScopeSetEquals } from "@t3tools/shared/oauthScope";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -177,21 +177,23 @@ export const exchangeRemoteDpopAccessToken = Effect.fn(
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
   const response = yield* executeRemoteRequest(
-    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/token"),
+    remoteEndpointUrl(input.httpBaseUrl, "/oauth/token"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
-    client.auth.dpopToken({
+    client.auth.token({
       headers: { dpop: input.dpopProof },
       payload: {
         grant_type: AuthTokenExchangeGrantType,
         subject_token: input.credential,
         subject_token_type: AuthEnvironmentBootstrapTokenType,
         requested_token_type: AuthAccessTokenType,
-        resource: new URL(input.httpBaseUrl).origin,
-        scope: AuthRemoteSessionScope,
+        scope: encodeOAuthScope(AuthStandardClientScopes),
       },
     }),
   );
-  if (!oauthScopeSetEquals(response.scope, [AuthRemoteSessionScope])) {
+  if (
+    response.token_type !== "DPoP" ||
+    !oauthScopeSetEquals(response.scope, AuthStandardClientScopes)
+  ) {
     return yield* new RemoteEnvironmentAuthInvalidJsonError({
       message: "Remote auth endpoint returned unexpected DPoP access token scopes.",
       cause: response.scope,
@@ -205,19 +207,20 @@ export const bootstrapRemoteBearerSession = Effect.fn(
 )(function* (input: {
   readonly httpBaseUrl: string;
   readonly credential: string;
-  readonly proofKeyThumbprint?: string;
-  readonly dpopProof?: string;
   readonly timeoutMs?: number;
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
   return yield* executeRemoteRequest(
-    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/bootstrap/bearer"),
+    remoteEndpointUrl(input.httpBaseUrl, "/oauth/token"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
-    client.auth.bootstrapBearer({
-      headers: input.dpopProof ? { dpop: input.dpopProof } : {},
+    client.auth.token({
+      headers: {},
       payload: {
-        credential: input.credential,
-        ...(input.proofKeyThumbprint ? { proofKeyThumbprint: input.proofKeyThumbprint } : {}),
+        grant_type: AuthTokenExchangeGrantType,
+        subject_token: input.credential,
+        subject_token_type: AuthEnvironmentBootstrapTokenType,
+        requested_token_type: AuthAccessTokenType,
+        scope: encodeOAuthScope(AuthStandardClientScopes),
       },
     }),
   );
@@ -274,8 +277,8 @@ export const fetchRemoteEnvironmentDescriptor = Effect.fn(
   );
 });
 
-export const issueRemoteWebSocketToken = Effect.fn(
-  "clientRuntime.remote.issueRemoteWebSocketToken",
+export const issueRemoteWebSocketTicket = Effect.fn(
+  "clientRuntime.remote.issueRemoteWebSocketTicket",
 )(function* (input: {
   readonly httpBaseUrl: string;
   readonly bearerToken: string;
@@ -283,9 +286,9 @@ export const issueRemoteWebSocketToken = Effect.fn(
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
   return yield* executeRemoteRequest(
-    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/ws-token"),
+    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/websocket-ticket"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
-    client.auth.webSocketToken({
+    client.auth.webSocketTicket({
       headers: {
         authorization: `Bearer ${input.bearerToken}`,
       },
@@ -293,8 +296,8 @@ export const issueRemoteWebSocketToken = Effect.fn(
   );
 });
 
-export const issueRemoteDpopWebSocketToken = Effect.fn(
-  "clientRuntime.remote.issueRemoteDpopWebSocketToken",
+export const issueRemoteDpopWebSocketTicket = Effect.fn(
+  "clientRuntime.remote.issueRemoteDpopWebSocketTicket",
 )(function* (input: {
   readonly httpBaseUrl: string;
   readonly accessToken: string;
@@ -303,9 +306,9 @@ export const issueRemoteDpopWebSocketToken = Effect.fn(
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
   return yield* executeRemoteRequest(
-    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/ws-token"),
+    remoteEndpointUrl(input.httpBaseUrl, "/api/auth/websocket-ticket"),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
-    client.auth.webSocketToken({
+    client.auth.webSocketTicket({
       headers: {
         authorization: `DPoP ${input.accessToken}`,
         dpop: input.dpopProof,
@@ -322,7 +325,7 @@ export const resolveRemoteWebSocketConnectionUrl = Effect.fn(
   readonly bearerToken: string;
   readonly timeoutMs?: number;
 }) {
-  const issued = yield* issueRemoteWebSocketToken({
+  const issued = yield* issueRemoteWebSocketTicket({
     httpBaseUrl: input.httpBaseUrl,
     bearerToken: input.bearerToken,
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
@@ -332,7 +335,7 @@ export const resolveRemoteWebSocketConnectionUrl = Effect.fn(
   if (url.pathname === "" || url.pathname === "/") {
     url.pathname = "/ws";
   }
-  url.searchParams.set("wsToken", issued.token);
+  url.searchParams.set("wsTicket", issued.ticket);
   return url.toString();
 });
 
@@ -345,7 +348,7 @@ export const resolveRemoteDpopWebSocketConnectionUrl = Effect.fn(
   readonly dpopProof: string;
   readonly timeoutMs?: number;
 }) {
-  const issued = yield* issueRemoteDpopWebSocketToken({
+  const issued = yield* issueRemoteDpopWebSocketTicket({
     httpBaseUrl: input.httpBaseUrl,
     accessToken: input.accessToken,
     dpopProof: input.dpopProof,
@@ -355,6 +358,6 @@ export const resolveRemoteDpopWebSocketConnectionUrl = Effect.fn(
   if (url.pathname === "" || url.pathname === "/") {
     url.pathname = "/ws";
   }
-  url.searchParams.set("wsToken", issued.token);
+  url.searchParams.set("wsTicket", issued.ticket);
   return url.toString();
 });

@@ -110,7 +110,7 @@ describe("mobile DPoP", () => {
       });
       const bootstrap = yield* createDpopProof({
         method: "POST",
-        url: "https://desktop.example.test/api/auth/bootstrap/bearer",
+        url: "https://desktop.example.test/oauth/token",
         proofKey,
       });
 
@@ -130,7 +130,7 @@ describe("mobile DPoP", () => {
         verifyDpopProof({
           proof: bootstrap.proof,
           method: "POST",
-          url: "https://desktop.example.test/api/auth/bootstrap/bearer",
+          url: "https://desktop.example.test/oauth/token",
           expectedThumbprint: proofKey.thumbprint,
           nowEpochSeconds: proofIat(bootstrap.proof),
         }),

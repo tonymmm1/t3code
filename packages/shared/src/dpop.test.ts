@@ -48,7 +48,7 @@ describe("verifyDpopProof", () => {
   const publicJwk = publicKey.export({ format: "jwk" }) as DpopPublicJwk;
   const proof = signDpopProof({
     method: "POST",
-    url: "https://example.com/api/auth/bootstrap/bearer",
+    url: "https://example.com/oauth/token",
     iat: 100,
     privateKey,
     publicJwk,
@@ -60,7 +60,7 @@ describe("verifyDpopProof", () => {
       verifyDpopProof({
         proof,
         method: "POST",
-        url: "https://example.com/api/auth/bootstrap/bearer",
+        url: "https://example.com/oauth/token",
         nowEpochSeconds: 101,
         expectedThumbprint: thumbprint,
       }),
@@ -77,7 +77,7 @@ describe("verifyDpopProof", () => {
       verifyDpopProof({
         proof,
         method: "GET",
-        url: "https://example.com/api/auth/bootstrap/bearer",
+        url: "https://example.com/oauth/token",
         nowEpochSeconds: 101,
         expectedThumbprint: thumbprint,
       }),
@@ -95,7 +95,7 @@ describe("verifyDpopProof", () => {
       verifyDpopProof({
         proof,
         method: "POST",
-        url: "https://example.com/api/auth/bootstrap/bearer",
+        url: "https://example.com/oauth/token",
         nowEpochSeconds: 101,
         expectedThumbprint: "other-thumbprint",
       }),
@@ -104,7 +104,7 @@ describe("verifyDpopProof", () => {
       verifyDpopProof({
         proof,
         method: "POST",
-        url: "https://example.com/api/auth/bootstrap/bearer",
+        url: "https://example.com/oauth/token",
         nowEpochSeconds: 1_000,
         expectedThumbprint: thumbprint,
       }),
@@ -136,7 +136,7 @@ describe("verifyDpopProof", () => {
       verifyDpopProof({
         proof,
         method: "POST",
-        url: "https://example.com/api/auth/bootstrap/bearer",
+        url: "https://example.com/oauth/token",
         nowEpochSeconds: 101,
         expectedThumbprint: thumbprint,
         expectedAccessToken: "clerk-access-token",
@@ -186,7 +186,7 @@ describe("verifyDpopProof", () => {
     };
     const proofWithPrivateJwk = signDpopProof({
       method: "POST",
-      url: "https://example.com/api/auth/bootstrap/bearer",
+      url: "https://example.com/oauth/token",
       iat: 100,
       privateKey,
       publicJwk: privateJwk,
@@ -196,7 +196,7 @@ describe("verifyDpopProof", () => {
       verifyDpopProof({
         proof: proofWithPrivateJwk,
         method: "POST",
-        url: "https://example.com/api/auth/bootstrap/bearer",
+        url: "https://example.com/oauth/token",
         nowEpochSeconds: 101,
         expectedThumbprint: thumbprint,
       }),

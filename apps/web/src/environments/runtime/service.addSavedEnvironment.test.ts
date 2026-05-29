@@ -187,7 +187,7 @@ describe("addSavedEnvironment", () => {
         fetchSshEnvironmentDescriptor: mockFetchSshEnvironmentDescriptor,
         bootstrapSshBearerSession: mockBootstrapSshBearerSession,
         fetchSshSessionState: mockFetchSshSessionState,
-        issueSshWebSocketToken: vi.fn(),
+        issueSshWebSocketTicket: vi.fn(),
       },
     });
     mockResolveRemotePairingTarget.mockImplementation(
@@ -217,32 +217,32 @@ describe("addSavedEnvironment", () => {
     );
     mockBootstrapRemoteBearerSession.mockReturnValue(
       Effect.succeed({
-        sessionToken: "bearer-token",
-        role: "owner",
+        access_token: "bearer-token",
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       }),
     );
     mockFetchRemoteSessionState.mockReturnValue(
       Effect.succeed({
         authenticated: true,
-        role: "owner",
+        scopes: ["orchestration:read", "access:manage"],
       }),
     );
     mockFetchRemoteDpopSessionState.mockReturnValue(
       Effect.succeed({
         authenticated: true,
-        role: "owner",
+        scopes: ["orchestration:read", "access:manage"],
       }),
     );
     mockResolveRemoteWebSocketConnectionUrl.mockReturnValue(
-      Effect.succeed("wss://remote.example.com/?wsToken=remote-token"),
+      Effect.succeed("wss://remote.example.com/?wsTicket=remote-token"),
     );
     mockFetchSshEnvironmentDescriptor.mockResolvedValue({
       environmentId: EnvironmentId.make("environment-1"),
       label: "Remote environment",
     });
     mockBootstrapSshBearerSession.mockResolvedValue({
-      sessionToken: "ssh-bearer-token",
-      role: "owner",
+      access_token: "ssh-bearer-token",
+      scope: "orchestration:read orchestration:operate terminal:operate review:write",
     });
     mockPersistSavedEnvironmentRecord.mockResolvedValue(undefined);
     mockWriteSavedEnvironmentBearerToken.mockResolvedValue(false);
@@ -253,7 +253,7 @@ describe("addSavedEnvironment", () => {
     mockRemoveSavedEnvironmentBearerToken.mockResolvedValue(undefined);
     mockFetchSshSessionState.mockResolvedValue({
       authenticated: true,
-      role: "owner",
+      scopes: ["orchestration:read", "access:manage"],
     });
     mockCreateEnvironmentConnection.mockImplementation(
       (input: { knownEnvironment: { environmentId: EnvironmentId }; client: unknown }) => ({
@@ -430,7 +430,7 @@ describe("addSavedEnvironment", () => {
           }),
         ),
       )
-      .mockReturnValue(Effect.succeed({ authenticated: true, role: "owner" }));
+      .mockReturnValue(Effect.succeed({ authenticated: true, scopes: ["orchestration:read"] }));
     mockReadManagedRelayClerkToken.mockResolvedValue("clerk-token");
     mockConnectManagedCloudEnvironment.mockReturnValue(
       Effect.succeed({
@@ -518,18 +518,18 @@ describe("addSavedEnvironment", () => {
     mockWriteSavedEnvironmentBearerToken.mockResolvedValue(true);
     mockBootstrapSshBearerSession
       .mockResolvedValueOnce({
-        sessionToken: "ssh-bearer-token",
-        role: "owner",
+        access_token: "ssh-bearer-token",
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       })
       .mockResolvedValueOnce({
-        sessionToken: "ssh-bearer-token-2",
-        role: "owner",
+        access_token: "ssh-bearer-token-2",
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       });
     mockFetchSshSessionState
       .mockRejectedValueOnce(new Error("[ssh_http:401] Unauthorized"))
       .mockResolvedValueOnce({
         authenticated: true,
-        role: "owner",
+        scopes: ["orchestration:read", "access:manage"],
       });
 
     const { connectDesktopSshEnvironment, resetEnvironmentServiceForTests } =
@@ -584,18 +584,18 @@ describe("addSavedEnvironment", () => {
     mockWriteSavedEnvironmentBearerToken.mockResolvedValue(true);
     mockBootstrapSshBearerSession
       .mockResolvedValueOnce({
-        sessionToken: "ssh-bearer-token",
-        role: "owner",
+        access_token: "ssh-bearer-token",
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       })
       .mockResolvedValueOnce({
-        sessionToken: "ssh-bearer-token-2",
-        role: "owner",
+        access_token: "ssh-bearer-token-2",
+        scope: "orchestration:read orchestration:operate terminal:operate review:write",
       });
     mockFetchSshSessionState
       .mockRejectedValueOnce(new Error("[ssh_http:401] Unauthorized"))
       .mockResolvedValueOnce({
         authenticated: true,
-        role: "owner",
+        scopes: ["orchestration:read", "access:manage"],
       });
 
     const createdConnections: Array<{
@@ -879,7 +879,7 @@ describe("addSavedEnvironment", () => {
     );
     let resolveSessionState!: (value: {
       readonly authenticated: true;
-      readonly role: "owner";
+      readonly scopes: ReadonlyArray<"orchestration:read" | "access:manage">;
     }) => void;
     mockFetchRemoteSessionState.mockReturnValue(
       Effect.promise(
@@ -905,7 +905,7 @@ describe("addSavedEnvironment", () => {
     await disconnectSavedEnvironment(EnvironmentId.make("environment-1"));
     resolveSessionState({
       authenticated: true,
-      role: "owner",
+      scopes: ["orchestration:read", "access:manage"],
     });
     await expect(reconnectPromise).resolves.toBeUndefined();
 

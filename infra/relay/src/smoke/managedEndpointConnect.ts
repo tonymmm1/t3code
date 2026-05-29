@@ -4,9 +4,9 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   AuthAccessTokenType,
-  AuthDpopAccessTokenResult,
+  AuthAccessTokenResult,
   AuthEnvironmentBootstrapTokenType,
-  AuthRemoteSessionScope,
+  AuthStandardClientScopes,
   AuthTokenExchangeGrantType,
   ExecutionEnvironmentDescriptor,
   type OrchestrationShellSnapshot,
@@ -307,11 +307,14 @@ function verifyManagedEndpointWebSocket(input: {
   return Effect.scoped(
     Effect.gen(function* () {
       let shellSnapshot: OrchestrationShellSnapshot | null = null;
-      const wsTokenUrl = endpointUrl(input.connect.endpoint.httpBaseUrl, "/api/auth/ws-token");
+      const wsTicketUrl = endpointUrl(
+        input.connect.endpoint.httpBaseUrl,
+        "/api/auth/websocket-ticket",
+      );
       const proof = yield* makeDpopProof({
         keyPair: input.keyPair,
         method: "POST",
-        url: wsTokenUrl,
+        url: wsTicketUrl,
         now: yield* DateTime.now,
         accessToken: input.accessToken,
       });
@@ -543,7 +546,7 @@ const managedEndpointConnectSmokeProgram = Effect.gen(function* () {
       }),
     });
   }
-  const bootstrapUrl = endpointUrl(connect.endpoint.httpBaseUrl, "/api/auth/token");
+  const bootstrapUrl = endpointUrl(connect.endpoint.httpBaseUrl, "/oauth/token");
   const bootstrapDpop = yield* makeDpopProof({
     keyPair,
     method: "POST",
@@ -553,7 +556,7 @@ const managedEndpointConnectSmokeProgram = Effect.gen(function* () {
   const bootstrap = yield* fetchJson({
     url: bootstrapUrl,
     method: "POST",
-    schema: AuthDpopAccessTokenResult,
+    schema: AuthAccessTokenResult,
     headers: {
       dpop: bootstrapDpop,
       "content-type": "application/x-www-form-urlencoded",
@@ -563,8 +566,7 @@ const managedEndpointConnectSmokeProgram = Effect.gen(function* () {
       subject_token: connect.credential,
       subject_token_type: AuthEnvironmentBootstrapTokenType,
       requested_token_type: AuthAccessTokenType,
-      resource: new URL(connect.endpoint.httpBaseUrl).origin,
-      scope: AuthRemoteSessionScope,
+      scope: encodeOAuthScope(AuthStandardClientScopes),
     }).toString(),
   });
   const shellSnapshot = yield* verifyManagedEndpointWebSocket({
