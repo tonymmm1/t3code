@@ -9,6 +9,7 @@ import {
   EnvironmentHttpBadRequestError,
   EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
+  EnvironmentHttpUnauthorizedError,
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
 } from "@t3tools/contracts";
@@ -36,6 +37,32 @@ import {
 } from "./Services/ServerAuth.ts";
 import { SessionCredentialService } from "./Services/SessionCredentialService.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
+import { verifyRequestDpopProof } from "./dpop.ts";
+
+const CREDENTIAL_RESPONSE_HEADERS = {
+  "cache-control": "no-store",
+  pragma: "no-cache",
+} as const;
+
+const appendCredentialResponseHeaders = HttpEffect.appendPreResponseHandler((_request, response) =>
+  Effect.succeed(HttpServerResponse.setHeaders(response, CREDENTIAL_RESPONSE_HEADERS)),
+);
+
+const appendDpopChallengeHeader = HttpEffect.appendPreResponseHandler((_request, response) =>
+  Effect.succeed(HttpServerResponse.setHeader(response, "www-authenticate", "DPoP")),
+);
+
+const appendDpopChallengeOnUnauthorized = (error: EnvironmentHttpUnauthorizedError) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const usesDpop =
+      (request.originalUrl.startsWith("/oauth/token") && request.headers.dpop !== undefined) ||
+      request.headers.authorization?.startsWith("DPoP ") === true;
+    if (usesDpop) {
+      yield* appendDpopChallengeHeader;
+    }
+    return yield* error;
+  });
 
 export const respondToAuthError = (error: ServerAuthError) =>
   Effect.gen(function* () {
@@ -93,7 +120,12 @@ export const environmentAuthenticatedAuthLayer = Layer.effect(
             scopes: new Set(session.scopes),
           }),
         );
-      }).pipe(Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError));
+      }).pipe(
+        Effect.catchTags({
+          EnvironmentHttpUnauthorizedError: appendDpopChallengeOnUnauthorized,
+          ServerAuthInternalError: failEnvironmentHttpInternalError,
+        }),
+      );
   }),
 );
 
@@ -104,10 +136,13 @@ export const authHttpApiLayer = HttpApiBuilder.group(
     const serverAuth = yield* ServerAuth;
     const sessions = yield* SessionCredentialService;
 
-    const sessionHandler = Effect.fn("environment.auth.session")(function* () {
-      const request = yield* HttpServerRequest.HttpServerRequest;
-      return yield* serverAuth.getSessionState(request);
-    });
+    const sessionHandler = Effect.fn("environment.auth.session")(
+      function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        return yield* serverAuth.getSessionState(request);
+      },
+      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
+    );
 
     const browserSessionHandler = Effect.fn("environment.auth.browserSession")(
       function* (input: { readonly payload: AuthBrowserSessionRequest }) {
@@ -136,13 +171,17 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         yield* HttpEffect.appendPreResponseHandler((_request, response) =>
           Effect.succeed(HttpServerResponse.mergeCookies(response, sessionCookies)),
         );
+        yield* appendCredentialResponseHeaders;
         return result.response;
       },
       Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
     );
 
     const tokenHandler = Effect.fn("environment.auth.token")(
-      function* (input: { readonly payload: AuthTokenExchangeRequest }) {
+      function* (input: {
+        readonly headers: { readonly dpop?: string };
+        readonly payload: AuthTokenExchangeRequest;
+      }) {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const requestedScopes = parseAllowedOAuthScope({
           value: input.payload.scope,
@@ -160,18 +199,27 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             message: "Requested token scope is invalid.",
           });
         }
+        const proofKeyThumbprint = input.headers.dpop
+          ? yield* verifyRequestDpopProof({ request })
+          : undefined;
+        yield* appendCredentialResponseHeaders;
         return yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
           input.payload.subject_token,
           requestedScopes,
           deriveAuthClientMetadata({ request }),
+          proofKeyThumbprint ? { proofKeyThumbprint } : undefined,
         );
       },
-      Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),
+      Effect.catchTags({
+        EnvironmentHttpUnauthorizedError: appendDpopChallengeOnUnauthorized,
+        ServerAuthInternalError: failEnvironmentHttpInternalError,
+      }),
     );
 
     const webSocketTicketHandler = Effect.fn("environment.auth.webSocketTicket")(
       function* () {
         const session = yield* EnvironmentAuthenticatedPrincipal;
+        yield* appendCredentialResponseHeaders;
         return yield* serverAuth.issueWebSocketTicket(session);
       },
       Effect.catchTag("ServerAuthInternalError", failEnvironmentHttpInternalError),

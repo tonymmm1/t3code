@@ -14,13 +14,17 @@ import {
   type AuthWebSocketTicketResult,
 } from "@t3tools/contracts";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 import { AuthControlPlane } from "../Services/AuthControlPlane.ts";
+import { ServerSecretStore } from "../Services/ServerSecretStore.ts";
+import { verifyRequestDpopProof } from "../dpop.ts";
 import { ServerAuthPolicyLive } from "./ServerAuthPolicy.ts";
 import { BootstrapCredentialService } from "../Services/BootstrapCredentialService.ts";
 import { BootstrapCredentialError } from "../Services/BootstrapCredentialService.ts";
@@ -44,6 +48,7 @@ type BootstrapExchangeResult = {
 };
 
 const AUTHORIZATION_PREFIX = "Bearer ";
+const DPOP_AUTHORIZATION_PREFIX = "DPoP ";
 const WEBSOCKET_TICKET_QUERY_PARAM = "wsTicket";
 
 export function toBootstrapExchangeError(cause: BootstrapCredentialError): ServerAuthError {
@@ -68,11 +73,22 @@ function parseBearerToken(request: HttpServerRequest.HttpServerRequest): string 
   return token.length > 0 ? token : null;
 }
 
+function parseDpopToken(request: HttpServerRequest.HttpServerRequest): string | null {
+  const header = request.headers["authorization"];
+  if (typeof header !== "string" || !header.startsWith(DPOP_AUTHORIZATION_PREFIX)) {
+    return null;
+  }
+  const token = header.slice(DPOP_AUTHORIZATION_PREFIX.length).trim();
+  return token.length > 0 ? token : null;
+}
+
 export const makeServerAuth = Effect.gen(function* () {
   const policy = yield* ServerAuthPolicy;
   const bootstrapCredentials = yield* BootstrapCredentialService;
   const authControlPlane = yield* AuthControlPlane;
   const sessions = yield* SessionCredentialService;
+  const secretStore = yield* ServerSecretStore;
+  const crypto = yield* Crypto.Crypto;
   const descriptor = yield* policy.getDescriptor();
 
   const authenticateToken = (
@@ -91,6 +107,7 @@ export const makeServerAuth = Effect.gen(function* () {
         subject: session.subject,
         method: session.method,
         scopes: session.scopes,
+        ...(session.proofKeyThumbprint ? { proofKeyThumbprint: session.proofKeyThumbprint } : {}),
         ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
       })),
       Effect.mapError(
@@ -101,13 +118,43 @@ export const makeServerAuth = Effect.gen(function* () {
   const authenticateRequest = (request: HttpServerRequest.HttpServerRequest) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request);
-    const credential = cookieToken ?? bearerToken;
+    const dpopToken = parseDpopToken(request);
+    const credential = cookieToken ?? bearerToken ?? dpopToken;
     if (!credential) {
       return Effect.fail(
         new EnvironmentHttpUnauthorizedError({ message: "Authentication required." }),
       );
     }
-    return authenticateToken(credential);
+    return authenticateToken(credential).pipe(
+      Effect.flatMap((session) => {
+        if (session.proofKeyThumbprint) {
+          if (!dpopToken || dpopToken !== credential) {
+            return Effect.fail(
+              new EnvironmentHttpUnauthorizedError({
+                message: "DPoP-bound access token requires DPoP authorization.",
+              }),
+            );
+          }
+          return verifyRequestDpopProof({
+            request,
+            expectedThumbprint: session.proofKeyThumbprint,
+            expectedAccessToken: dpopToken,
+          }).pipe(
+            Effect.provideService(ServerSecretStore, secretStore),
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.as(session),
+          );
+        }
+        if (dpopToken) {
+          return Effect.fail(
+            new EnvironmentHttpUnauthorizedError({
+              message: "DPoP authorization requires a proof-bound access token.",
+            }),
+          );
+        }
+        return Effect.succeed(session);
+      }),
+    );
   };
 
   const getSessionState: ServerAuthShape["getSessionState"] = (request) =>
@@ -172,8 +219,8 @@ export const makeServerAuth = Effect.gen(function* () {
     );
 
   const exchangeBootstrapCredentialForAccessToken: ServerAuthShape["exchangeBootstrapCredentialForAccessToken"] =
-    (credential, requestedScopes, requestMetadata) =>
-      bootstrapCredentials.consume(credential).pipe(
+    (credential, requestedScopes, requestMetadata, input) =>
+      bootstrapCredentials.consume(credential, input).pipe(
         Effect.mapError(toBootstrapExchangeError),
         Effect.flatMap((grant) =>
           Effect.gen(function* () {
@@ -184,9 +231,15 @@ export const makeServerAuth = Effect.gen(function* () {
             }
             return yield* sessions
               .issue({
-                method: "bearer-access-token",
+                method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
                 subject: grant.subject,
                 scopes: requestedScopes,
+                ...(input?.proofKeyThumbprint
+                  ? {
+                      proofKeyThumbprint: input.proofKeyThumbprint,
+                      ttl: Duration.hours(1),
+                    }
+                  : {}),
                 client: {
                   ...requestMetadata,
                   ...(grant.label ? { label: grant.label } : {}),
@@ -210,7 +263,7 @@ export const makeServerAuth = Effect.gen(function* () {
                 ({
                   access_token: session.token,
                   issued_token_type: AuthAccessTokenType,
-                  token_type: "Bearer",
+                  token_type: input?.proofKeyThumbprint ? "DPoP" : "Bearer",
                   expires_in: Math.max(
                     0,
                     Math.floor(

@@ -1820,6 +1820,34 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("rejects managed relay configuration reads without relay management scope", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const credentialResponse = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie: ownerCookie },
+        body: yield* HttpBody.json({}),
+      });
+      const credential = (yield* credentialResponse.json) as { readonly credential: string };
+      const pairedCookie = yield* getAuthenticatedSessionCookieHeader(credential.credential);
+      const linkStateUrl = yield* getHttpServerUrl("/api/cloud/link-state");
+      const response = yield* fetchEffect(linkStateUrl, {
+        headers: { cookie: pairedCookie },
+      });
+      const body = yield* responseJsonEffect<{ readonly _tag?: string; readonly message?: string }>(
+        response,
+      );
+
+      assert.equal(response.status, 403);
+      assert.equal(body._tag, "EnvironmentHttpForbiddenError");
+      assert.equal(
+        body.message,
+        "The authenticated token is missing required scope: relay:manage.",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("rejects relay config with an invalid cloud mint public key", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

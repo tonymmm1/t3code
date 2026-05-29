@@ -230,10 +230,7 @@ const WorkspaceLayerLive = Layer.mergeAll(
   WorkspaceFileSystemLayerLive,
 );
 
-const AuthLayerLive = ServerAuthLive.pipe(
-  Layer.provideMerge(PersistenceLayerLive),
-  Layer.provide(ServerSecretStoreLive),
-);
+const AuthLayerLive = ServerAuthLive.pipe(Layer.provideMerge(PersistenceLayerLive));
 
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
@@ -275,6 +272,8 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),
   Layer.provideMerge(AuthLayerLive),
+  Layer.provideMerge(ServerSecretStoreLive),
+  Layer.provideMerge(CloudManagedEndpointRuntimeLive),
 );
 
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(

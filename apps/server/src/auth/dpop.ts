@@ -1,3 +1,4 @@
+import { EnvironmentHttpUnauthorizedError } from "@t3tools/contracts";
 import { verifyDpopProof } from "@t3tools/shared/dpop";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -5,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
-import { AuthError } from "./Services/ServerAuth.ts";
+import { ServerAuthInternalError } from "./Services/ServerAuth.ts";
 import { ServerSecretStore } from "./Services/ServerSecretStore.ts";
 
 function firstHeaderValue(value: string | undefined): string | undefined {
@@ -41,9 +42,8 @@ export const verifyRequestDpopProof = (input: {
       ...(input.expectedAccessToken ? { expectedAccessToken: input.expectedAccessToken } : {}),
     });
     if (!result.ok) {
-      return yield* new AuthError({
+      return yield* new EnvironmentHttpUnauthorizedError({
         message: result.reason,
-        status: 401,
       });
     }
     const secretStore = yield* ServerSecretStore;
@@ -54,9 +54,8 @@ export const verifyRequestDpopProof = (input: {
       Effect.map(Encoding.encodeBase64Url),
       Effect.mapError(
         (cause) =>
-          new AuthError({
+          new ServerAuthInternalError({
             message: "Failed to calculate DPoP replay key.",
-            status: 500,
             cause,
           }),
       ),
@@ -76,9 +75,8 @@ export const verifyRequestDpopProof = (input: {
       .pipe(
         Effect.catchTag("SecretStoreError", () =>
           Effect.fail(
-            new AuthError({
+            new EnvironmentHttpUnauthorizedError({
               message: "DPoP proof replayed.",
-              status: 401,
             }),
           ),
         ),

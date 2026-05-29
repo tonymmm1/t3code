@@ -29,6 +29,7 @@ export interface AuthenticatedSession {
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+  readonly proofKeyThumbprint?: string;
   readonly expiresAt?: DateTime.DateTime;
 }
 
@@ -47,7 +48,7 @@ export interface ServerAuthShape {
   readonly getDescriptor: () => Effect.Effect<ServerAuthDescriptor>;
   readonly getSessionState: (
     request: HttpServerRequest.HttpServerRequest,
-  ) => Effect.Effect<AuthSessionState, never>;
+  ) => Effect.Effect<AuthSessionState, ServerAuthInternalError>;
   readonly createBrowserSession: (
     credential: string,
     requestMetadata: AuthClientMetadata,
@@ -62,6 +63,9 @@ export interface ServerAuthShape {
     credential: string,
     requestedScopes: ReadonlyArray<AuthEnvironmentScope>,
     requestMetadata: AuthClientMetadata,
+    input?: {
+      readonly proofKeyThumbprint?: string;
+    },
   ) => Effect.Effect<AuthAccessTokenResult, ServerAuthError>;
   readonly issuePairingCredential: (
     input?: AuthCreatePairingCredentialInput & {
