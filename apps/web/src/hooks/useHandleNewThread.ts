@@ -15,7 +15,6 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { selectProjectThreadDefaults } from "../lib/projectThreadDefaults";
 import { selectProjectsAcrossEnvironments, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteTarget } from "../threadRoutes";
@@ -25,9 +24,6 @@ import { useSettings } from "./useSettings";
 function useNewThreadState() {
   const projects = useStore(useShallow((store) => selectProjectsAcrossEnvironments(store)));
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
-  const projectThreadDefaultsByProjectKey = useSettings(
-    (settings) => settings.projectThreadDefaultsByProjectKey,
-  );
   const router = useRouter();
   const getCurrentRouteTarget = useCallback(() => {
     const currentRouteParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};
@@ -50,7 +46,6 @@ function useNewThreadState() {
         applyStickyState,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
-        setPrompt,
       } = useComposerDraftStore.getState();
       const currentRouteTarget = getCurrentRouteTarget();
       const project = projects.find(
@@ -133,13 +128,6 @@ function useNewThreadState() {
           runtimeMode: DEFAULT_RUNTIME_MODE,
         });
         applyStickyState(draftId);
-        const projectThreadDefaults = selectProjectThreadDefaults(
-          projectThreadDefaultsByProjectKey,
-          logicalProjectKey,
-        );
-        if (projectThreadDefaults.prompt.length > 0) {
-          setPrompt(draftId, projectThreadDefaults.prompt);
-        }
 
         await router.navigate({
           to: "/draft/$draftId",
@@ -147,13 +135,7 @@ function useNewThreadState() {
         });
       })();
     },
-    [
-      getCurrentRouteTarget,
-      projectGroupingSettings,
-      projectThreadDefaultsByProjectKey,
-      router,
-      projects,
-    ],
+    [getCurrentRouteTarget, projectGroupingSettings, router, projects],
   );
 }
 

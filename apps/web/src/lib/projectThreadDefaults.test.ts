@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProjectWorktreeBranchName,
   buildProjectWorktreePath,
+  composeFirstTurnPromptWithProjectDefault,
   composePromptWithProjectDefault,
   formatProjectCopyPathsText,
   normalizeProjectThreadDefaults,
@@ -60,5 +61,23 @@ describe("projectThreadDefaults", () => {
         prompt: "Implement the toolbar.",
       }),
     ).toBe("Read AGENTS.md first.\n\nImplement the toolbar.");
+  });
+
+  it("injects the default prompt only on the first turn", () => {
+    expect(
+      composeFirstTurnPromptWithProjectDefault({
+        defaultPrompt: "Read AGENTS.md first.",
+        isFirstMessage: true,
+        prompt: "Implement the toolbar.",
+      }),
+    ).toBe("Read AGENTS.md first.\n\nImplement the toolbar.");
+
+    expect(
+      composeFirstTurnPromptWithProjectDefault({
+        defaultPrompt: "Read AGENTS.md first.",
+        isFirstMessage: false,
+        prompt: "Implement the toolbar.",
+      }),
+    ).toBe("Implement the toolbar.");
   });
 });

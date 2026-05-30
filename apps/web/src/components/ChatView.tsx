@@ -126,6 +126,7 @@ import {
 import {
   buildProjectWorktreeBranchName,
   buildProjectWorktreePath,
+  composeFirstTurnPromptWithProjectDefault,
   composePromptWithProjectDefault,
   selectProjectThreadDefaults,
 } from "../lib/projectThreadDefaults";
@@ -1286,9 +1287,6 @@ export default function ChatView(props: ChatViewProps) {
         interactionMode: DEFAULT_INTERACTION_MODE,
         ...input,
       });
-      if (activeProjectThreadDefaults?.prompt) {
-        setComposerDraftPrompt(nextDraftId, activeProjectThreadDefaults.prompt);
-      }
       await navigate({
         to: "/draft/$draftId",
         params: buildDraftThreadRouteParams(nextDraftId),
@@ -1297,7 +1295,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeProject,
-      activeProjectThreadDefaults,
       draftId,
       getDraftSession,
       getDraftSessionByLogicalProjectKey,
@@ -1305,7 +1302,6 @@ export default function ChatView(props: ChatViewProps) {
       navigate,
       projectGroupingSettings,
       routeKind,
-      setComposerDraftPrompt,
       setDraftThreadContext,
       setLogicalProjectDraftThreadId,
     ],
@@ -2933,6 +2929,12 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    const projectThreadDefaultsForSend =
+      activeProjectThreadDefaults ??
+      selectProjectThreadDefaults(
+        settings.projectThreadDefaultsByProjectKey,
+        deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings),
+      );
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
@@ -2952,10 +2954,15 @@ export default function ChatView(props: ChatViewProps) {
 
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
-    const messageTextForSend = appendTerminalContextsToPrompt(
+    const userMessageTextForSend = appendTerminalContextsToPrompt(
       promptForSend,
       composerTerminalContextsSnapshot,
     );
+    const messageTextForSend = composeFirstTurnPromptWithProjectDefault({
+      defaultPrompt: projectThreadDefaultsForSend.prompt,
+      isFirstMessage,
+      prompt: userMessageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+    });
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingPrompt({
@@ -3067,12 +3074,6 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       const turnAttachments = await turnAttachmentsPromise;
-      const projectThreadDefaultsForSend =
-        activeProjectThreadDefaults ??
-        selectProjectThreadDefaults(
-          settings.projectThreadDefaultsByProjectKey,
-          deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings),
-        );
       const worktreeBranch = baseBranchForWorktree
         ? buildProjectWorktreeBranchName({
             defaults: projectThreadDefaultsForSend,

@@ -62,6 +62,17 @@ export function composePromptWithProjectDefault(input: {
   return `${defaultPrompt}\n\n${prompt}`;
 }
 
+export function composeFirstTurnPromptWithProjectDefault(input: {
+  readonly defaultPrompt: string;
+  readonly isFirstMessage: boolean;
+  readonly prompt: string;
+}): string {
+  if (!input.isFirstMessage) {
+    return input.prompt;
+  }
+  return composePromptWithProjectDefault(input);
+}
+
 function normalizeBranchPrefix(prefix: string): string | null {
   if (prefix.trim().length === 0) {
     return null;
