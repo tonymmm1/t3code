@@ -39,6 +39,18 @@ export const SidebarThreadPreviewCount = Schema.Int.check(
 export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 
+export const ProjectThreadDefaults = Schema.Struct({
+  prompt: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  worktreeBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  branchPrefix: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  copyPaths: Schema.Array(TrimmedString).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type ProjectThreadDefaults = typeof ProjectThreadDefaults.Type;
+
+export const DEFAULT_PROJECT_THREAD_DEFAULTS: ProjectThreadDefaults = Schema.decodeSync(
+  ProjectThreadDefaults,
+)({});
+
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -72,6 +84,10 @@ export const ClientSettingsSchema = Schema.Struct({
       ),
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  projectThreadDefaultsByProjectKey: Schema.Record(
+    TrimmedNonEmptyString,
+    ProjectThreadDefaults,
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
@@ -500,6 +516,9 @@ export const ClientSettingsPatch = Schema.Struct({
         ),
       }),
     ),
+  ),
+  projectThreadDefaultsByProjectKey: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, ProjectThreadDefaults),
   ),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

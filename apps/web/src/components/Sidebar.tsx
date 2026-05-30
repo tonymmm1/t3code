@@ -5,6 +5,7 @@ import {
   CloudIcon,
   FolderPlusIcon,
   ListPlusIcon,
+  PencilIcon,
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -210,6 +211,12 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
+import { ProjectThreadDefaultsDialog } from "./ProjectThreadDefaultsDialog";
+import {
+  isProjectThreadDefaultsEmpty,
+  normalizeProjectThreadDefaults,
+  selectProjectThreadDefaults,
+} from "../lib/projectThreadDefaults";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -1086,6 +1093,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const defaultThreadEnvMode = useSettings<ThreadEnvMode>(
     (settings) => settings.defaultThreadEnvMode,
   );
+  const projectThreadDefaultsByProjectKey = useSettings(
+    (settings) => settings.projectThreadDefaultsByProjectKey,
+  );
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
   const { updateSettings } = useUpdateSettings();
   const sidebarThreadPreviewCount = useSettings<SidebarThreadPreviewCount>(
@@ -1099,9 +1109,27 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const renameProjectThreadGroup = useUiStateStore((state) => state.renameProjectThreadGroup);
   const deleteProjectThreadGroup = useUiStateStore((state) => state.deleteProjectThreadGroup);
   const assignThreadToProjectGroup = useUiStateStore((state) => state.assignThreadToProjectGroup);
+  const [threadDefaultsDialogOpen, setThreadDefaultsDialogOpen] = useState(false);
   const projectThreadGroupState =
     useUiStateStore((state) => state.threadGroupsByProjectId[project.projectKey]) ??
     EMPTY_SIDEBAR_THREAD_GROUP_STATE;
+  const projectThreadDefaults = useMemo(
+    () => selectProjectThreadDefaults(projectThreadDefaultsByProjectKey, project.projectKey),
+    [project.projectKey, projectThreadDefaultsByProjectKey],
+  );
+  const saveProjectThreadDefaults = useCallback(
+    (nextDefaults: typeof projectThreadDefaults) => {
+      const normalized = normalizeProjectThreadDefaults(nextDefaults);
+      const nextDefaultsByProjectKey = { ...projectThreadDefaultsByProjectKey };
+      if (isProjectThreadDefaultsEmpty(normalized)) {
+        delete nextDefaultsByProjectKey[project.projectKey];
+      } else {
+        nextDefaultsByProjectKey[project.projectKey] = normalized;
+      }
+      updateSettings({ projectThreadDefaultsByProjectKey: nextDefaultsByProjectKey });
+    },
+    [project.projectKey, projectThreadDefaultsByProjectKey, updateSettings],
+  );
   const prSortInfoByThreadKey = useSidebarThreadPrStatusStore(
     (state) => state.prSortInfoByThreadKey,
   );
@@ -2279,7 +2307,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         <SidebarMenuButton
           ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
           size="sm"
-          className={`gap-2 px-2 py-1.5 pr-8 text-left hover:bg-accent group-hover/project-header:bg-accent group-hover/project-header:text-sidebar-accent-foreground max-sm:pr-14 ${
+          className={`gap-2 px-2 py-1.5 pr-20 text-left hover:bg-accent group-hover/project-header:bg-accent group-hover/project-header:text-sidebar-accent-foreground ${
             isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
           }`}
           {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -2350,6 +2378,27 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         <Tooltip>
           <TooltipTrigger
             render={
+              <div className="pointer-events-none absolute top-1 right-[3.125rem] opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/project-header:pointer-events-auto group-hover/project-header:opacity-100 group-focus-within/project-header:pointer-events-auto group-focus-within/project-header:opacity-100">
+                <button
+                  type="button"
+                  aria-label={`Edit thread defaults for ${project.displayName}`}
+                  className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 hover:bg-secondary hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setThreadDefaultsDialogOpen(true);
+                  }}
+                >
+                  <PencilIcon className="size-3.5" />
+                </button>
+              </div>
+            }
+          />
+          <TooltipPopup side="top">Thread defaults</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
               <div className="pointer-events-none absolute top-1 right-7 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/project-header:pointer-events-auto group-hover/project-header:opacity-100 group-focus-within/project-header:pointer-events-auto group-focus-within/project-header:opacity-100">
                 <button
                   type="button"
@@ -2385,6 +2434,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </TooltipPopup>
         </Tooltip>
       </div>
+
+      <ProjectThreadDefaultsDialog
+        open={threadDefaultsDialogOpen}
+        projectName={project.displayName}
+        defaults={projectThreadDefaults}
+        onOpenChange={setThreadDefaultsDialogOpen}
+        onSave={saveProjectThreadDefaults}
+      />
 
       {threadSortOrder === "pull_request"
         ? visibleProjectThreads.map((thread) => (

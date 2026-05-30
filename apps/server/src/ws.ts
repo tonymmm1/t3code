@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import fsPromises from "node:fs/promises";
+import nodePath from "node:path";
+
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -93,10 +97,112 @@ import {
   type SessionCredentialChange,
 } from "./auth/Services/SessionCredentialService.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { expandHomePath } from "./pathExpansion.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+function nodeErrorCode(error: unknown): string | null {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+    ? error.code
+    : null;
+}
+
+function isPathWithinDirectory(directory: string, candidate: string): boolean {
+  const relative = nodePath.relative(directory, candidate);
+  return relative === "" || (!relative.startsWith("..") && !nodePath.isAbsolute(relative));
+}
+
+function resolveProjectRelativePath(input: {
+  readonly projectCwd: string;
+  readonly relativePath: string;
+}): { readonly sourcePath: string; readonly relativePath: string } | null {
+  const relativePath = input.relativePath.trim();
+  if (relativePath.length === 0 || nodePath.isAbsolute(relativePath)) {
+    return null;
+  }
+
+  const sourcePath = nodePath.resolve(input.projectCwd, relativePath);
+  if (!isPathWithinDirectory(input.projectCwd, sourcePath)) {
+    return null;
+  }
+
+  return { sourcePath, relativePath };
+}
+
+function copyProjectWorktreeDefaults(input: {
+  readonly projectCwd: string;
+  readonly worktreePath: string;
+  readonly copyPaths: readonly string[];
+}) {
+  const projectCwd = nodePath.resolve(input.projectCwd);
+  const worktreePath = nodePath.resolve(input.worktreePath);
+  const copyPaths = [...new Set(input.copyPaths.map((copyPath) => copyPath.trim()))].filter(
+    (copyPath) => copyPath.length > 0,
+  );
+
+  return Effect.forEach(
+    copyPaths,
+    (copyPath) =>
+      Effect.gen(function* () {
+        const resolved = resolveProjectRelativePath({ projectCwd, relativePath: copyPath });
+        if (!resolved) {
+          yield* Effect.logWarning("bootstrap worktree copy path skipped", {
+            projectCwd,
+            worktreePath,
+            copyPath,
+            reason: "outside-project",
+          });
+          return;
+        }
+
+        const destinationPath = nodePath.resolve(worktreePath, resolved.relativePath);
+        if (!isPathWithinDirectory(worktreePath, destinationPath)) {
+          yield* Effect.logWarning("bootstrap worktree copy destination skipped", {
+            projectCwd,
+            worktreePath,
+            copyPath,
+            reason: "outside-worktree",
+          });
+          return;
+        }
+
+        yield* Effect.tryPromise(async () => {
+          let sourceStats;
+          try {
+            sourceStats = await fsPromises.stat(resolved.sourcePath);
+          } catch (error) {
+            const code = nodeErrorCode(error);
+            if (code === "ENOENT" || code === "ENOTDIR") {
+              return;
+            }
+            throw error;
+          }
+
+          await fsPromises.mkdir(nodePath.dirname(destinationPath), { recursive: true });
+          await fsPromises.cp(resolved.sourcePath, destinationPath, {
+            recursive: sourceStats.isDirectory(),
+            force: true,
+            errorOnExist: false,
+          });
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("bootstrap worktree copy failed", {
+              projectCwd,
+              worktreePath,
+              copyPath,
+              detail: error instanceof Error ? error.message : String(error),
+            }),
+          ),
+        );
+      }),
+    { discard: true },
+  );
+}
 
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
@@ -540,9 +646,16 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
                 cwd: bootstrap.prepareWorktree.projectCwd,
                 refName: bootstrap.prepareWorktree.baseBranch,
                 newRefName: bootstrap.prepareWorktree.branch,
-                path: null,
+                path: bootstrap.prepareWorktree.path
+                  ? expandHomePath(bootstrap.prepareWorktree.path)
+                  : null,
               });
               targetWorktreePath = worktree.worktree.path;
+              yield* copyProjectWorktreeDefaults({
+                projectCwd: bootstrap.prepareWorktree.projectCwd,
+                worktreePath: targetWorktreePath,
+                copyPaths: bootstrap.prepareWorktree.copyPaths ?? [],
+              });
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: yield* serverCommandId("bootstrap-thread-meta-update"),

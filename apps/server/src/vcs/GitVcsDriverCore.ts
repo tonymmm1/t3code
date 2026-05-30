@@ -36,6 +36,7 @@ import {
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
 import { ServerConfig } from "../config.ts";
+import { expandHomePath } from "../pathExpansion.ts";
 const isGitCommandError = Schema.is(GitCommandError);
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -2091,7 +2092,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const targetBranch = input.newRefName ?? input.refName;
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
-    const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
+    const worktreePath = input.path
+      ? expandHomePath(input.path)
+      : path.join(worktreesDir, repoName, sanitizedBranch);
     const startPoint = yield* qualifyWorktreeStartPoint(input.cwd, input.refName);
     const args = input.newRefName
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, startPoint]

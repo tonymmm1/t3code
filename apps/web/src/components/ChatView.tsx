@@ -98,7 +98,6 @@ import {
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useCommandPaletteStore } from "../commandPaletteStore";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { BranchToolbar } from "./BranchToolbar";
@@ -124,6 +123,12 @@ import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
+import {
+  buildProjectWorktreeBranchName,
+  buildProjectWorktreePath,
+  composePromptWithProjectDefault,
+  selectProjectThreadDefaults,
+} from "../lib/projectThreadDefaults";
 import {
   reconnectSavedEnvironment,
   useSavedEnvironmentRegistryStore,
@@ -1150,6 +1155,15 @@ export default function ChatView(props: ChatViewProps) {
     [],
   );
   const projectGroupingSettings = useSettings(selectProjectGroupingSettings);
+  const activeProjectThreadDefaults = useMemo(() => {
+    if (!activeProject) {
+      return null;
+    }
+    return selectProjectThreadDefaults(
+      settings.projectThreadDefaultsByProjectKey,
+      deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings),
+    );
+  }, [activeProject, projectGroupingSettings, settings.projectThreadDefaultsByProjectKey]);
   const logicalProjectEnvironments = useMemo(() => {
     if (!activeProject) return [];
     const logicalKey = deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
@@ -1272,6 +1286,9 @@ export default function ChatView(props: ChatViewProps) {
         interactionMode: DEFAULT_INTERACTION_MODE,
         ...input,
       });
+      if (activeProjectThreadDefaults?.prompt) {
+        setComposerDraftPrompt(nextDraftId, activeProjectThreadDefaults.prompt);
+      }
       await navigate({
         to: "/draft/$draftId",
         params: buildDraftThreadRouteParams(nextDraftId),
@@ -1280,6 +1297,7 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeProject,
+      activeProjectThreadDefaults,
       draftId,
       getDraftSession,
       getDraftSessionByLogicalProjectKey,
@@ -1287,6 +1305,7 @@ export default function ChatView(props: ChatViewProps) {
       navigate,
       projectGroupingSettings,
       routeKind,
+      setComposerDraftPrompt,
       setDraftThreadContext,
       setLogicalProjectDraftThreadId,
     ],
@@ -3048,6 +3067,26 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       const turnAttachments = await turnAttachmentsPromise;
+      const projectThreadDefaultsForSend =
+        activeProjectThreadDefaults ??
+        selectProjectThreadDefaults(
+          settings.projectThreadDefaultsByProjectKey,
+          deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings),
+        );
+      const worktreeBranch = baseBranchForWorktree
+        ? buildProjectWorktreeBranchName({
+            defaults: projectThreadDefaultsForSend,
+            titleSeed: title,
+            randomHex,
+          })
+        : undefined;
+      const configuredWorktreePath = worktreeBranch
+        ? buildProjectWorktreePath({
+            defaults: projectThreadDefaultsForSend,
+            branchName: worktreeBranch,
+          })
+        : null;
+      const worktreeCopyPaths = projectThreadDefaultsForSend.copyPaths;
       const bootstrap =
         isLocalDraftThread || baseBranchForWorktree
           ? {
@@ -3070,7 +3109,9 @@ export default function ChatView(props: ChatViewProps) {
                     prepareWorktree: {
                       projectCwd: activeProject.cwd,
                       baseBranch: baseBranchForWorktree,
-                      branch: buildTemporaryWorktreeBranchName(randomHex),
+                      branch: worktreeBranch,
+                      ...(configuredWorktreePath ? { path: configuredWorktreePath } : {}),
+                      ...(worktreeCopyPaths.length > 0 ? { copyPaths: worktreeCopyPaths } : {}),
                     },
                     runSetupScript: true,
                   }
@@ -3485,7 +3526,10 @@ export default function ChatView(props: ChatViewProps) {
     const createdAt = new Date().toISOString();
     const nextThreadId = newThreadId();
     const planMarkdown = activeProposedPlan.planMarkdown;
-    const implementationPrompt = buildPlanImplementationPrompt(planMarkdown);
+    const implementationPrompt = composePromptWithProjectDefault({
+      defaultPrompt: activeProjectThreadDefaults?.prompt ?? "",
+      prompt: buildPlanImplementationPrompt(planMarkdown),
+    });
     const outgoingImplementationPrompt = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
@@ -3575,6 +3619,7 @@ export default function ChatView(props: ChatViewProps) {
       .then(finish, finish);
   }, [
     activeProject,
+    activeProjectThreadDefaults,
     activeProposedPlan,
     activeThreadBranch,
     activeThread,

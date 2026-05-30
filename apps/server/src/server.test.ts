@@ -3894,6 +3894,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   projectCwd: "/tmp/project",
                   baseBranch: "main",
                   branch: "t3code/bootstrap-refName",
+                  path: "/tmp/custom-bootstrap-worktree",
                 },
                 runSetupScript: true,
               },
@@ -3917,7 +3918,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           cwd: "/tmp/project",
           refName: "main",
           newRefName: "t3code/bootstrap-refName",
-          path: null,
+          path: "/tmp/custom-bootstrap-worktree",
         });
         assert.deepEqual(runForThread.mock.calls[0]?.[0], {
           threadId: ThreadId.make("thread-bootstrap"),
@@ -3941,6 +3942,97 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           assert.equal(finalCommand.bootstrap, undefined);
         }
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("copies configured project paths into bootstrapped worktrees", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-bootstrap-copy-project-",
+      });
+      const worktreeDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-bootstrap-copy-worktree-",
+      });
+      yield* fileSystem.makeDirectory(path.join(projectDir, ".codex"), { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(projectDir, ".codex", "config.toml"),
+        'model = "gpt-5"',
+      );
+      yield* fileSystem.writeFileString(path.join(projectDir, "AGENTS.md"), "# Instructions");
+
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const createWorktree = vi.fn(
+        (_: Parameters<GitVcsDriver.GitVcsDriverShape["createWorktree"]>[0]) =>
+          Effect.succeed({
+            worktree: {
+              refName: "feature/copied-defaults",
+              path: worktreeDir,
+            },
+          }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: {
+            createWorktree,
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-copy-defaults"),
+            threadId: ThreadId.make("thread-bootstrap-copy-defaults"),
+            message: {
+              messageId: MessageId.make("msg-bootstrap-copy-defaults"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              prepareWorktree: {
+                projectCwd: projectDir,
+                baseBranch: "main",
+                branch: "feature/copied-defaults",
+                copyPaths: [".codex", "AGENTS.md", "../outside", "/tmp/outside", "missing"],
+              },
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 2);
+      assert.equal(
+        yield* fileSystem.readFileString(path.join(worktreeDir, ".codex", "config.toml")),
+        'model = "gpt-5"',
+      );
+      assert.equal(
+        yield* fileSystem.readFileString(path.join(worktreeDir, "AGENTS.md")),
+        "# Instructions",
+      );
+      assert.equal(yield* fileSystem.exists(path.join(worktreeDir, "outside")), false);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.meta.update", "thread.turn.start"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("records setup-script failures without aborting bootstrap turn start", () =>

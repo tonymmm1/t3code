@@ -554,6 +554,8 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   projectCwd: TrimmedNonEmptyString,
   baseBranch: TrimmedNonEmptyString,
   branch: Schema.optional(TrimmedNonEmptyString),
+  path: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  copyPaths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 
 const ThreadTurnStartBootstrap = Schema.Struct({
