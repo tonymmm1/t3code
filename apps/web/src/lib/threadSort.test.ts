@@ -187,7 +187,7 @@ describe("sortThreads", () => {
     ]);
   });
 
-  it("groups pull request threads by draft, review, inactive, and non-PR state", () => {
+  it("groups draft pull request threads below reviewed open pull requests", () => {
     const sorted = sortThreads(
       [
         makeThread({
@@ -230,7 +230,7 @@ describe("sortThreads", () => {
               kind: "pull_request",
               state: "open",
               isDraft: true,
-              reviewDecision: "review_required",
+              reviewDecision: "approved",
             },
           ],
           [
@@ -253,9 +253,9 @@ describe("sortThreads", () => {
     );
 
     expect(sorted.map((thread) => thread.id)).toEqual([
-      ThreadId.make("thread-draft"),
       ThreadId.make("thread-open"),
       ThreadId.make("thread-reviewed"),
+      ThreadId.make("thread-draft"),
       ThreadId.make("thread-merged"),
       ThreadId.make("thread-non-pr"),
     ]);

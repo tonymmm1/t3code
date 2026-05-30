@@ -79,16 +79,16 @@ function getThreadPrSortRank(info: ThreadPrSortInfo | null | undefined): number 
   if (info.kind === "non_pr") {
     return 4;
   }
-  if (info.isDraft === true) {
-    return 0;
-  }
   if (info.state === "closed" || info.state === "merged") {
     return 3;
   }
-  if (info.reviewDecision === "approved" || info.reviewDecision === "changes_requested") {
+  if (info.isDraft === true) {
     return 2;
   }
-  return 1;
+  if (info.reviewDecision === "approved" || info.reviewDecision === "changes_requested") {
+    return 1;
+  }
+  return 0;
 }
 
 export function sortThreads<T extends Pick<Thread, "id"> & ThreadSortInput>(
