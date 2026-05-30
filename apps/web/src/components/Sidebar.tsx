@@ -586,7 +586,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     <span className="text-[10px] tabular-nums leading-none">
                       #{prStatus.number}
                     </span>
-                    <ChangeRequestStatusIcon className="size-3" />
+                    <ChangeRequestStatusIcon className="size-3" kind={prStatus.iconKind} />
                   </button>
                 }
               />

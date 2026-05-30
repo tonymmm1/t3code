@@ -1,6 +1,13 @@
 import { scopeProjectRef, scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
 import type { VcsStatusResult } from "@t3tools/contracts";
-import { CloudIcon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
+import {
+  CloudIcon,
+  GitMergeIcon,
+  GitPullRequestClosedIcon,
+  GitPullRequestDraftIcon,
+  GitPullRequestIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { useMemo } from "react";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import {
@@ -19,6 +26,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 export interface PrStatusIndicator {
   number: number;
   label: string;
+  iconKind: "open" | "draft" | "closed" | "merged";
   colorClass: string;
   tooltip: string;
   url: string;
@@ -40,9 +48,21 @@ export function prStatusIndicator(
   const presentation = resolveChangeRequestPresentation(provider);
 
   if (pr.state === "open") {
+    if (pr.isDraft === true) {
+      return {
+        number: pr.number,
+        label: `${presentation.shortName} draft`,
+        iconKind: "draft",
+        colorClass: "text-zinc-500 dark:text-zinc-400/80",
+        tooltip: `#${pr.number} ${presentation.shortName} draft: ${pr.title}`,
+        url: pr.url,
+      };
+    }
+
     return {
       number: pr.number,
       label: `${presentation.shortName} open`,
+      iconKind: "open",
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
       tooltip: `#${pr.number} ${presentation.shortName} open: ${pr.title}`,
       url: pr.url,
@@ -52,6 +72,7 @@ export function prStatusIndicator(
     return {
       number: pr.number,
       label: `${presentation.shortName} closed`,
+      iconKind: "closed",
       colorClass: "text-zinc-500 dark:text-zinc-400/80",
       tooltip: `#${pr.number} ${presentation.shortName} closed: ${pr.title}`,
       url: pr.url,
@@ -61,6 +82,7 @@ export function prStatusIndicator(
     return {
       number: pr.number,
       label: `${presentation.shortName} merged`,
+      iconKind: "merged",
       colorClass: "text-violet-600 dark:text-violet-300/90",
       tooltip: `#${pr.number} ${presentation.shortName} merged: ${pr.title}`,
       url: pr.url,
@@ -69,8 +91,22 @@ export function prStatusIndicator(
   return null;
 }
 
-export function ChangeRequestStatusIcon({ className }: { className?: string }) {
-  return <GitPullRequestIcon className={className} />;
+export function ChangeRequestStatusIcon({
+  className,
+  kind = "open",
+}: {
+  className?: string;
+  kind?: PrStatusIndicator["iconKind"];
+}) {
+  const Icon =
+    kind === "draft"
+      ? GitPullRequestDraftIcon
+      : kind === "closed"
+        ? GitPullRequestClosedIcon
+        : kind === "merged"
+          ? GitMergeIcon
+          : GitPullRequestIcon;
+  return <Icon className={className} />;
 }
 
 export function resolveThreadPr(
@@ -184,7 +220,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
             }
           >
             <span className="text-[10px] tabular-nums leading-none">#{prStatus.number}</span>
-            <ChangeRequestStatusIcon className="size-3" />
+            <ChangeRequestStatusIcon className="size-3" kind={prStatus.iconKind} />
           </TooltipTrigger>
           <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
         </Tooltip>

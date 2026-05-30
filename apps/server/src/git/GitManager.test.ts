@@ -55,6 +55,8 @@ interface FakeGhScenario {
     baseRefName: string;
     headRefName: string;
     state?: "open" | "closed" | "merged";
+    isDraft?: boolean;
+    reviewDecision?: "approved" | "changes_requested" | "review_required" | null;
     isCrossRepository?: boolean;
     headRepositoryNameWithOwner?: string | null;
     headRepositoryOwnerLogin?: string | null;
@@ -146,6 +148,18 @@ function normalizeFakePullRequestSummary(raw: unknown): GitHubPullRequestSummary
           ? "closed"
           : "merged"
       : undefined;
+  const isDraft = typeof record.isDraft === "boolean" ? record.isDraft : undefined;
+  const reviewDecision =
+    typeof record.reviewDecision === "string"
+      ? record.reviewDecision === "APPROVED" || record.reviewDecision === "approved"
+        ? "approved"
+        : record.reviewDecision === "CHANGES_REQUESTED" ||
+            record.reviewDecision === "changes_requested"
+          ? "changes_requested"
+          : "review_required"
+      : record.reviewDecision === null
+        ? null
+        : undefined;
   const isCrossRepository =
     typeof record.isCrossRepository === "boolean" ? record.isCrossRepository : undefined;
   const headRepositoryNameWithOwner =
@@ -168,6 +182,8 @@ function normalizeFakePullRequestSummary(raw: unknown): GitHubPullRequestSummary
     baseRefName,
     headRefName,
     ...(state ? { state } : {}),
+    ...(isDraft !== undefined ? { isDraft } : {}),
+    ...(reviewDecision !== undefined ? { reviewDecision } : {}),
     ...(isCrossRepository !== undefined ? { isCrossRepository } : {}),
     ...(headRepositoryNameWithOwner ? { headRepositoryNameWithOwner } : {}),
     ...(headRepositoryOwnerLogin ? { headRepositoryOwnerLogin } : {}),
@@ -265,6 +281,7 @@ function initRepo(
     yield* runGit(cwd, ["init", "--initial-branch=main"]);
     yield* runGit(cwd, ["config", "user.email", "test@example.com"]);
     yield* runGit(cwd, ["config", "user.name", "Test User"]);
+    yield* runGit(cwd, ["config", "commit.gpgsign", "false"]);
     yield* fs.writeFileString(path.join(cwd, "README.md"), "hello\n");
     yield* runGit(cwd, ["add", "README.md"]);
     yield* runGit(cwd, ["commit", "-m", "Initial commit"]);
@@ -745,6 +762,59 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseRef: "main",
         headRef: "feature/status-open-pr",
         state: "open",
+      });
+    }),
+  );
+
+  it.effect("status refresh carries updated pull request draft metadata", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/status-draft-refresh"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/status-draft-refresh"]);
+
+      const pullRequest = {
+        number: 18,
+        title: "Draft refresh",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/18",
+        baseRefName: "main",
+        headRefName: "feature/status-draft-refresh",
+        state: "OPEN",
+      };
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([{ ...pullRequest, isDraft: false }]),
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([{ ...pullRequest, isDraft: true }]),
+          ],
+        },
+      });
+
+      const initial = yield* manager.status({ cwd: repoDir });
+      yield* manager.invalidateRemoteStatus(repoDir);
+      const refreshed = yield* manager.status({ cwd: repoDir });
+
+      expect(initial.pr).toEqual({
+        number: 18,
+        title: "Draft refresh",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/18",
+        baseRef: "main",
+        headRef: "feature/status-draft-refresh",
+        state: "open",
+        isDraft: false,
+      });
+      expect(refreshed.pr).toEqual({
+        number: 18,
+        title: "Draft refresh",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/18",
+        baseRef: "main",
+        headRef: "feature/status-draft-refresh",
+        state: "open",
+        isDraft: true,
       });
     }),
   );
