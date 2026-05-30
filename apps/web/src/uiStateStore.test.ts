@@ -9,6 +9,9 @@ import {
   PERSISTED_STATE_KEY,
   type PersistedUiState,
   persistState,
+  createProjectThreadGroup,
+  assignThreadToProjectGroup,
+  deleteProjectThreadGroup,
   reorderProjects,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
@@ -24,6 +27,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
+    threadGroupsByProjectId: {},
     defaultAdvertisedEndpointKey: null,
     ...overrides,
   };
@@ -114,6 +118,50 @@ describe("uiStateStore pure functions", () => {
     expect(setDefaultAdvertisedEndpointKey(next, "")).toMatchObject({
       defaultAdvertisedEndpointKey: null,
     });
+  });
+
+  it("creates thread groups and assigns threads within a project", () => {
+    const initialState = makeUiState();
+
+    const withGroup = createProjectThreadGroup(initialState, "project-1", "  Review queue  ", {
+      id: "group-review",
+      createdAt: "2026-05-30T12:00:00.000Z",
+    });
+    const assigned = assignThreadToProjectGroup(
+      withGroup,
+      "project-1",
+      "env:thread-1",
+      "group-review",
+    );
+
+    expect(assigned.threadGroupsByProjectId["project-1"]).toEqual({
+      groups: [
+        {
+          id: "group-review",
+          name: "Review queue",
+          createdAt: "2026-05-30T12:00:00.000Z",
+        },
+      ],
+      threadGroupByThreadKey: {
+        "env:thread-1": "group-review",
+      },
+    });
+  });
+
+  it("deleting a thread group moves assigned threads back to the default group", () => {
+    const initialState = assignThreadToProjectGroup(
+      createProjectThreadGroup(makeUiState(), "project-1", "Done", {
+        id: "group-done",
+        createdAt: "2026-05-30T12:00:00.000Z",
+      }),
+      "project-1",
+      "env:thread-1",
+      "group-done",
+    );
+
+    const next = deleteProjectThreadGroup(initialState, "project-1", "group-done");
+
+    expect(next.threadGroupsByProjectId["project-1"]).toBeUndefined();
   });
 
   it("reorderProjects moves all member keys of a multi-member group together", () => {
@@ -577,6 +625,36 @@ describe("uiStateStore persistence round-trip", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(persisted.defaultAdvertisedEndpointKey).toBe("desktop-core:lan:http");
+  });
+
+  it("persists thread groups across restart", () => {
+    const state = assignThreadToProjectGroup(
+      createProjectThreadGroup(makeUiState(), "project-1", "PRs", {
+        id: "group-prs",
+        createdAt: "2026-05-30T12:00:00.000Z",
+      }),
+      "project-1",
+      "env:thread-1",
+      "group-prs",
+    );
+
+    persistState(state);
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    expect(persisted.threadGroupsByProjectId?.["project-1"]).toEqual({
+      groups: [
+        {
+          id: "group-prs",
+          name: "PRs",
+          createdAt: "2026-05-30T12:00:00.000Z",
+        },
+      ],
+      threadGroupByThreadKey: {
+        "env:thread-1": "group-prs",
+      },
+    });
   });
 
   it("preserves expand state across restart when project's logical key changes", () => {

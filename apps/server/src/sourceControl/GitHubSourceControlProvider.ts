@@ -36,6 +36,8 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     baseRefName: summary.baseRefName,
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
+    ...(summary.isDraft !== undefined ? { isDraft: summary.isDraft } : {}),
+    ...(summary.reviewDecision !== undefined ? { reviewDecision: summary.reviewDecision } : {}),
     updatedAt: Option.none(),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
@@ -124,7 +126,7 @@ export const make = Effect.fn("makeGitHubSourceControlProvider")(function* () {
             "--limit",
             String(input.limit ?? 20),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isDraft,reviewDecision,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         })
         .pipe(

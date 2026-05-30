@@ -17,6 +17,7 @@ import type { SidebarThreadSummary } from "../types";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export interface PrStatusIndicator {
+  number: number;
   label: string;
   colorClass: string;
   tooltip: string;
@@ -40,6 +41,7 @@ export function prStatusIndicator(
 
   if (pr.state === "open") {
     return {
+      number: pr.number,
       label: `${presentation.shortName} open`,
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
       tooltip: `#${pr.number} ${presentation.shortName} open: ${pr.title}`,
@@ -48,6 +50,7 @@ export function prStatusIndicator(
   }
   if (pr.state === "closed") {
     return {
+      number: pr.number,
       label: `${presentation.shortName} closed`,
       colorClass: "text-zinc-500 dark:text-zinc-400/80",
       tooltip: `#${pr.number} ${presentation.shortName} closed: ${pr.title}`,
@@ -56,6 +59,7 @@ export function prStatusIndicator(
   }
   if (pr.state === "merged") {
     return {
+      number: pr.number,
       label: `${presentation.shortName} merged`,
       colorClass: "text-violet-600 dark:text-violet-300/90",
       tooltip: `#${pr.number} ${presentation.shortName} merged: ${pr.title}`,
@@ -175,10 +179,11 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
             render={
               <span
                 aria-label={prStatus.tooltip}
-                className={`inline-flex items-center justify-center ${prStatus.colorClass}`}
+                className={`inline-flex items-center gap-0.5 ${prStatus.colorClass}`}
               />
             }
           >
+            <span className="text-[10px] tabular-nums leading-none">#{prStatus.number}</span>
             <ChangeRequestStatusIcon className="size-3" />
           </TooltipTrigger>
           <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>

@@ -187,6 +187,80 @@ describe("sortThreads", () => {
     ]);
   });
 
+  it("groups pull request threads by draft, review, inactive, and non-PR state", () => {
+    const sorted = sortThreads(
+      [
+        makeThread({
+          id: ThreadId.make("thread-non-pr"),
+          updatedAt: "2026-03-09T10:30:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-reviewed"),
+          updatedAt: "2026-03-09T10:05:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-draft"),
+          updatedAt: "2026-03-09T10:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-open"),
+          updatedAt: "2026-03-09T10:10:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-merged"),
+          updatedAt: "2026-03-09T10:15:00.000Z",
+        }),
+      ],
+      "pull_request",
+      {
+        getThreadKey: (thread) => thread.id,
+        prSortInfoByThreadKey: new Map([
+          ["thread-non-pr", { kind: "non_pr" }],
+          [
+            "thread-reviewed",
+            {
+              kind: "pull_request",
+              state: "open",
+              reviewDecision: "approved",
+            },
+          ],
+          [
+            "thread-draft",
+            {
+              kind: "pull_request",
+              state: "open",
+              isDraft: true,
+              reviewDecision: "review_required",
+            },
+          ],
+          [
+            "thread-open",
+            {
+              kind: "pull_request",
+              state: "open",
+              reviewDecision: "review_required",
+            },
+          ],
+          [
+            "thread-merged",
+            {
+              kind: "pull_request",
+              state: "merged",
+            },
+          ],
+        ]),
+      },
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-draft"),
+      ThreadId.make("thread-open"),
+      ThreadId.make("thread-reviewed"),
+      ThreadId.make("thread-merged"),
+      ThreadId.make("thread-non-pr"),
+    ]);
+  });
+
   it("uses updatedAt as a fallback for created_at sorting when createdAt is invalid", () => {
     const sorted = sortThreads(
       [

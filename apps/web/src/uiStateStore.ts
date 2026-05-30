@@ -1,5 +1,6 @@
 import { Debouncer } from "@tanstack/react-pacer";
 import { create } from "zustand";
+import { normalizeSidebarThreadGroupName, type SidebarThreadGroup } from "./sidebarThreadGroups";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -21,6 +22,13 @@ export interface PersistedUiState {
   projectOrderCwds?: string[];
   defaultAdvertisedEndpointKey?: string | null;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
+  threadGroupsByProjectId?: Record<
+    string,
+    {
+      groups?: SidebarThreadGroup[];
+      threadGroupByThreadKey?: Record<string, string>;
+    }
+  >;
 }
 
 export interface UiProjectState {
@@ -31,6 +39,13 @@ export interface UiProjectState {
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
+  threadGroupsByProjectId: Record<
+    string,
+    {
+      groups: SidebarThreadGroup[];
+      threadGroupByThreadKey: Record<string, string>;
+    }
+  >;
 }
 
 export interface UiEndpointState {
@@ -57,6 +72,7 @@ const initialState: UiState = {
   projectOrder: [],
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
+  threadGroupsByProjectId: {},
   defaultAdvertisedEndpointKey: null,
 };
 
@@ -103,6 +119,7 @@ function readPersistedState(): UiState {
       threadChangedFilesExpandedById: sanitizePersistedThreadChangedFilesExpanded(
         parsed.threadChangedFilesExpandedById,
       ),
+      threadGroupsByProjectId: sanitizePersistedThreadGroups(parsed.threadGroupsByProjectId),
     };
   } catch {
     return initialState;
@@ -131,6 +148,51 @@ function sanitizePersistedThreadChangedFilesExpanded(
 
     if (Object.keys(nextTurns).length > 0) {
       nextState[threadId] = nextTurns;
+    }
+  }
+
+  return nextState;
+}
+
+function sanitizePersistedThreadGroups(
+  value: PersistedUiState["threadGroupsByProjectId"],
+): UiState["threadGroupsByProjectId"] {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const nextState: UiState["threadGroupsByProjectId"] = {};
+  for (const [projectId, projectState] of Object.entries(value)) {
+    if (!projectId || !projectState || typeof projectState !== "object") {
+      continue;
+    }
+
+    const groupIds = new Set<string>();
+    const groups: SidebarThreadGroup[] = [];
+    for (const group of projectState.groups ?? []) {
+      if (!group || typeof group !== "object") {
+        continue;
+      }
+      const id = typeof group.id === "string" ? group.id.trim() : "";
+      const name =
+        typeof group.name === "string" ? normalizeSidebarThreadGroupName(group.name) : "";
+      const createdAt = typeof group.createdAt === "string" ? group.createdAt : "";
+      if (!id || !name || groupIds.has(id)) {
+        continue;
+      }
+      groupIds.add(id);
+      groups.push({ id, name, createdAt });
+    }
+
+    const threadGroupByThreadKey: Record<string, string> = {};
+    for (const [threadKey, groupId] of Object.entries(projectState.threadGroupByThreadKey ?? {})) {
+      if (threadKey && typeof groupId === "string" && groupIds.has(groupId)) {
+        threadGroupByThreadKey[threadKey] = groupId;
+      }
+    }
+
+    if (groups.length > 0) {
+      nextState[projectId] = { groups, threadGroupByThreadKey };
     }
   }
 
@@ -195,6 +257,7 @@ export function persistState(state: UiState): void {
         projectOrderCwds,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         threadChangedFilesExpandedById,
+        threadGroupsByProjectId: state.threadGroupsByProjectId,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -241,6 +304,41 @@ function nestedBooleanRecordsEqual(
   }
   for (const [key, value] of leftEntries) {
     if (!(key in right) || !recordsEqual(value, right[key]!)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function threadGroupStatesEqual(
+  left: UiState["threadGroupsByProjectId"],
+  right: UiState["threadGroupsByProjectId"],
+): boolean {
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  for (const [projectId, leftState] of leftEntries) {
+    const rightState = right[projectId];
+    if (!rightState) {
+      return false;
+    }
+    if (leftState.groups.length !== rightState.groups.length) {
+      return false;
+    }
+    for (let index = 0; index < leftState.groups.length; index += 1) {
+      const leftGroup = leftState.groups[index]!;
+      const rightGroup = rightState.groups[index]!;
+      if (
+        leftGroup.id !== rightGroup.id ||
+        leftGroup.name !== rightGroup.name ||
+        leftGroup.createdAt !== rightGroup.createdAt
+      ) {
+        return false;
+      }
+    }
+    if (!recordsEqual(leftState.threadGroupByThreadKey, rightState.threadGroupByThreadKey)) {
       return false;
     }
   }
@@ -427,12 +525,25 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
       retainedThreadIds.has(threadId),
     ),
   );
+  const nextThreadGroupsByProjectId = Object.fromEntries(
+    Object.entries(state.threadGroupsByProjectId).flatMap(([projectId, projectState]) => {
+      const threadGroupByThreadKey = Object.fromEntries(
+        Object.entries(projectState.threadGroupByThreadKey).filter(([threadKey]) =>
+          retainedThreadIds.has(threadKey),
+        ),
+      );
+      return projectState.groups.length > 0
+        ? [[projectId, { groups: projectState.groups, threadGroupByThreadKey }]]
+        : [];
+    }),
+  );
   if (
     recordsEqual(state.threadLastVisitedAtById, nextThreadLastVisitedAtById) &&
     nestedBooleanRecordsEqual(
       state.threadChangedFilesExpandedById,
       nextThreadChangedFilesExpandedById,
-    )
+    ) &&
+    threadGroupStatesEqual(state.threadGroupsByProjectId, nextThreadGroupsByProjectId)
   ) {
     return state;
   }
@@ -440,6 +551,7 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
+    threadGroupsByProjectId: nextThreadGroupsByProjectId,
   };
 }
 
@@ -492,17 +604,34 @@ export function markThreadUnread(
 export function clearThreadUi(state: UiState, threadId: string): UiState {
   const hasVisitedState = threadId in state.threadLastVisitedAtById;
   const hasChangedFilesState = threadId in state.threadChangedFilesExpandedById;
-  if (!hasVisitedState && !hasChangedFilesState) {
+  const hasThreadGroupState = Object.values(state.threadGroupsByProjectId).some(
+    (projectState) => threadId in projectState.threadGroupByThreadKey,
+  );
+  if (!hasVisitedState && !hasChangedFilesState && !hasThreadGroupState) {
     return state;
   }
   const nextThreadLastVisitedAtById = { ...state.threadLastVisitedAtById };
   const nextThreadChangedFilesExpandedById = { ...state.threadChangedFilesExpandedById };
+  const nextThreadGroupsByProjectId: UiState["threadGroupsByProjectId"] = {};
   delete nextThreadLastVisitedAtById[threadId];
   delete nextThreadChangedFilesExpandedById[threadId];
+  for (const [projectId, projectState] of Object.entries(state.threadGroupsByProjectId)) {
+    if (!(threadId in projectState.threadGroupByThreadKey)) {
+      nextThreadGroupsByProjectId[projectId] = projectState;
+      continue;
+    }
+    const threadGroupByThreadKey = { ...projectState.threadGroupByThreadKey };
+    delete threadGroupByThreadKey[threadId];
+    nextThreadGroupsByProjectId[projectId] = {
+      ...projectState,
+      threadGroupByThreadKey,
+    };
+  }
   return {
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
+    threadGroupsByProjectId: nextThreadGroupsByProjectId,
   };
 }
 
@@ -633,6 +762,147 @@ export function reorderProjects(
   };
 }
 
+function createThreadGroupId(): string {
+  return `group-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getProjectThreadGroupState(
+  state: UiState,
+  projectId: string,
+): UiState["threadGroupsByProjectId"][string] {
+  return state.threadGroupsByProjectId[projectId] ?? { groups: [], threadGroupByThreadKey: {} };
+}
+
+export function createProjectThreadGroup(
+  state: UiState,
+  projectId: string,
+  name: string,
+  options: { id?: string; createdAt?: string } = {},
+): UiState {
+  const normalizedName = normalizeSidebarThreadGroupName(name);
+  if (normalizedName.length === 0) {
+    return state;
+  }
+  const projectState = getProjectThreadGroupState(state, projectId);
+  const groupId = options.id ?? createThreadGroupId();
+  if (projectState.groups.some((group) => group.id === groupId)) {
+    return state;
+  }
+
+  return {
+    ...state,
+    threadGroupsByProjectId: {
+      ...state.threadGroupsByProjectId,
+      [projectId]: {
+        ...projectState,
+        groups: [
+          ...projectState.groups,
+          {
+            id: groupId,
+            name: normalizedName,
+            createdAt: options.createdAt ?? new Date().toISOString(),
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function renameProjectThreadGroup(
+  state: UiState,
+  projectId: string,
+  groupId: string,
+  name: string,
+): UiState {
+  const normalizedName = normalizeSidebarThreadGroupName(name);
+  if (normalizedName.length === 0) {
+    return state;
+  }
+  const projectState = state.threadGroupsByProjectId[projectId];
+  if (!projectState) {
+    return state;
+  }
+  const groups = projectState.groups.map((group) =>
+    group.id === groupId ? { ...group, name: normalizedName } : group,
+  );
+  if (groups.every((group, index) => group === projectState.groups[index])) {
+    return state;
+  }
+  return {
+    ...state,
+    threadGroupsByProjectId: {
+      ...state.threadGroupsByProjectId,
+      [projectId]: {
+        ...projectState,
+        groups,
+      },
+    },
+  };
+}
+
+export function deleteProjectThreadGroup(
+  state: UiState,
+  projectId: string,
+  groupId: string,
+): UiState {
+  const projectState = state.threadGroupsByProjectId[projectId];
+  if (!projectState || !projectState.groups.some((group) => group.id === groupId)) {
+    return state;
+  }
+  const groups = projectState.groups.filter((group) => group.id !== groupId);
+  const threadGroupByThreadKey = Object.fromEntries(
+    Object.entries(projectState.threadGroupByThreadKey).filter(([, assignedGroupId]) => {
+      return assignedGroupId !== groupId;
+    }),
+  );
+
+  const nextThreadGroupsByProjectId = { ...state.threadGroupsByProjectId };
+  if (groups.length === 0) {
+    delete nextThreadGroupsByProjectId[projectId];
+  } else {
+    nextThreadGroupsByProjectId[projectId] = {
+      groups,
+      threadGroupByThreadKey,
+    };
+  }
+  return {
+    ...state,
+    threadGroupsByProjectId: nextThreadGroupsByProjectId,
+  };
+}
+
+export function assignThreadToProjectGroup(
+  state: UiState,
+  projectId: string,
+  threadKey: string,
+  groupId: string | null,
+): UiState {
+  const projectState = getProjectThreadGroupState(state, projectId);
+  const normalizedGroupId =
+    groupId && projectState.groups.some((group) => group.id === groupId) ? groupId : null;
+  if ((projectState.threadGroupByThreadKey[threadKey] ?? null) === normalizedGroupId) {
+    return state;
+  }
+
+  const threadGroupByThreadKey = { ...projectState.threadGroupByThreadKey };
+  if (normalizedGroupId === null) {
+    delete threadGroupByThreadKey[threadKey];
+  } else {
+    threadGroupByThreadKey[threadKey] = normalizedGroupId;
+  }
+
+  return {
+    ...state,
+    threadGroupsByProjectId: {
+      ...state.threadGroupsByProjectId,
+      [projectId]: {
+        ...projectState,
+        threadGroupByThreadKey,
+      },
+    },
+  };
+}
+
 interface UiStateStore extends UiState {
   syncProjects: (projects: readonly SyncProjectInput[]) => void;
   syncThreads: (threads: readonly SyncThreadInput[]) => void;
@@ -646,6 +916,14 @@ interface UiStateStore extends UiState {
   reorderProjects: (
     draggedProjectIds: readonly string[],
     targetProjectIds: readonly string[],
+  ) => void;
+  createProjectThreadGroup: (projectId: string, name: string) => void;
+  renameProjectThreadGroup: (projectId: string, groupId: string, name: string) => void;
+  deleteProjectThreadGroup: (projectId: string, groupId: string) => void;
+  assignThreadToProjectGroup: (
+    projectId: string,
+    threadKey: string,
+    groupId: string | null,
   ) => void;
 }
 
@@ -667,6 +945,14 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setProjectExpanded(state, projectId, expanded)),
   reorderProjects: (draggedProjectIds, targetProjectIds) =>
     set((state) => reorderProjects(state, draggedProjectIds, targetProjectIds)),
+  createProjectThreadGroup: (projectId, name) =>
+    set((state) => createProjectThreadGroup(state, projectId, name)),
+  renameProjectThreadGroup: (projectId, groupId, name) =>
+    set((state) => renameProjectThreadGroup(state, projectId, groupId, name)),
+  deleteProjectThreadGroup: (projectId, groupId) =>
+    set((state) => deleteProjectThreadGroup(state, projectId, groupId)),
+  assignThreadToProjectGroup: (projectId, threadKey, groupId) =>
+    set((state) => assignThreadToProjectGroup(state, projectId, threadKey, groupId)),
 }));
 
 useUiStateStore.subscribe((state) => debouncedPersistState.maybeExecute(state));

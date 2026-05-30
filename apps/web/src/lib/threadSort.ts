@@ -7,6 +7,18 @@ export type ThreadSortInput = Pick<Thread, "createdAt" | "updatedAt"> & {
   messages?: Pick<Thread["messages"][number], "createdAt" | "role">[];
 };
 
+export interface ThreadPrSortInfo {
+  kind: "pull_request" | "non_pr" | "unknown";
+  state?: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  reviewDecision?: "approved" | "changes_requested" | "review_required" | null;
+}
+
+export interface ThreadSortOptions<T> {
+  getThreadKey?: (thread: T) => string;
+  prSortInfoByThreadKey?: ReadonlyMap<string, ThreadPrSortInfo>;
+}
+
 export function toSortableTimestamp(iso: string | undefined): number | null {
   if (!iso) return null;
   const ms = Date.parse(iso);
@@ -60,11 +72,45 @@ export function getThreadSortTimestamp(
   return getLatestUserMessageTimestamp(thread);
 }
 
+function getThreadPrSortRank(info: ThreadPrSortInfo | null | undefined): number {
+  if (!info || info.kind === "unknown") {
+    return 5;
+  }
+  if (info.kind === "non_pr") {
+    return 4;
+  }
+  if (info.isDraft === true) {
+    return 0;
+  }
+  if (info.state === "closed" || info.state === "merged") {
+    return 3;
+  }
+  if (info.reviewDecision === "approved" || info.reviewDecision === "changes_requested") {
+    return 2;
+  }
+  return 1;
+}
+
 export function sortThreads<T extends Pick<Thread, "id"> & ThreadSortInput>(
   threads: readonly T[],
   sortOrder: SidebarThreadSortOrder,
+  options: ThreadSortOptions<T> = {},
 ): T[] {
   return threads.toSorted((left, right) => {
+    if (sortOrder === "pull_request") {
+      const leftKey = options.getThreadKey?.(left);
+      const rightKey = options.getThreadKey?.(right);
+      const leftPrRank = getThreadPrSortRank(
+        leftKey ? options.prSortInfoByThreadKey?.get(leftKey) : undefined,
+      );
+      const rightPrRank = getThreadPrSortRank(
+        rightKey ? options.prSortInfoByThreadKey?.get(rightKey) : undefined,
+      );
+      if (leftPrRank !== rightPrRank) {
+        return leftPrRank - rightPrRank;
+      }
+    }
+
     const rightTimestamp = getThreadSortTimestamp(right, sortOrder);
     const leftTimestamp = getThreadSortTimestamp(left, sortOrder);
     const byTimestamp =
