@@ -20,6 +20,12 @@ export type SourceControlProviderInfo = typeof SourceControlProviderInfo.Type;
 
 export const ChangeRequestState = Schema.Literals(["open", "closed", "merged"]);
 export type ChangeRequestState = typeof ChangeRequestState.Type;
+export const ChangeRequestReviewDecision = Schema.Literals([
+  "approved",
+  "changes_requested",
+  "review_required",
+]);
+export type ChangeRequestReviewDecision = typeof ChangeRequestReviewDecision.Type;
 
 export const ChangeRequest = Schema.Struct({
   provider: SourceControlProviderKind,
@@ -29,6 +35,8 @@ export const ChangeRequest = Schema.Struct({
   baseRefName: TrimmedNonEmptyString,
   headRefName: TrimmedNonEmptyString,
   state: ChangeRequestState,
+  isDraft: Schema.optional(Schema.Boolean),
+  reviewDecision: Schema.optional(Schema.NullOr(ChangeRequestReviewDecision)),
   updatedAt: Schema.Option(Schema.DateTimeUtc),
   isCrossRepository: Schema.optional(Schema.Boolean),
   headRepositoryNameWithOwner: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

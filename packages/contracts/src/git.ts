@@ -43,6 +43,11 @@ const GitPushStepStatus = Schema.Literals([
 const GitBranchStepStatus = Schema.Literals(["created", "skipped_not_requested"]);
 const GitPrStepStatus = Schema.Literals(["created", "opened_existing", "skipped_not_requested"]);
 const VcsStatusChangeRequestState = Schema.Literals(["open", "closed", "merged"]);
+const VcsStatusChangeRequestReviewDecision = Schema.Literals([
+  "approved",
+  "changes_requested",
+  "review_required",
+]);
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestState = Schema.Literals(["open", "closed", "merged"]);
 const GitPreparePullRequestThreadMode = Schema.Literals(["local", "worktree"]);
@@ -193,6 +198,8 @@ const VcsStatusChangeRequest = Schema.Struct({
   baseRef: TrimmedNonEmptyStringSchema,
   headRef: TrimmedNonEmptyStringSchema,
   state: VcsStatusChangeRequestState,
+  isDraft: Schema.optional(Schema.Boolean),
+  reviewDecision: Schema.optional(Schema.NullOr(VcsStatusChangeRequestReviewDecision)),
 });
 
 const VcsStatusLocalShape = {

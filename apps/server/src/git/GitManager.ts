@@ -113,6 +113,8 @@ interface OpenPrInfo {
 
 interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  reviewDecision?: "approved" | "changes_requested" | "review_required" | null;
   updatedAt: Option.Option<DateTime.Utc>;
 }
 
@@ -307,6 +309,8 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     baseRefName: summary.baseRefName,
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
+    ...(summary.isDraft !== undefined ? { isDraft: summary.isDraft } : {}),
+    ...(summary.reviewDecision !== undefined ? { reviewDecision: summary.reviewDecision } : {}),
     updatedAt: summary.updatedAt,
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
@@ -469,6 +473,8 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  reviewDecision?: "approved" | "changes_requested" | "review_required" | null;
 } {
   return {
     number: pr.number,
@@ -477,6 +483,8 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(pr.isDraft !== undefined ? { isDraft: pr.isDraft } : {}),
+    ...(pr.reviewDecision !== undefined ? { reviewDecision: pr.reviewDecision } : {}),
   };
 }
 
@@ -926,6 +934,10 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
           baseRefName: firstPullRequest.baseRefName,
           headRefName: firstPullRequest.headRefName,
           state: "open",
+          ...(firstPullRequest.isDraft !== undefined ? { isDraft: firstPullRequest.isDraft } : {}),
+          ...(firstPullRequest.reviewDecision !== undefined
+            ? { reviewDecision: firstPullRequest.reviewDecision }
+            : {}),
           updatedAt: Option.none(),
         } satisfies PullRequestInfo;
       }
